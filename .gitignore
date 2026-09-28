@@ -9,3 +9,4 @@ dist/
 nul*
 docs/TASK-*.md
 docs/claude-*.md
+docs/HANDOFF*
