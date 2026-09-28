@@ -7,3 +7,5 @@ build/
 dist/
 .venv/
 nul*
+docs/TASK-*.md
+docs/claude-*.md
