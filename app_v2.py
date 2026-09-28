@@ -1322,7 +1322,7 @@ class Session:
         self.shell.update_providers()
         bottom = ft.Container(
             ft.Row([ft.Text("cx-pilot", size=12, weight=ft.FontWeight.W_700, color=T.INK2),
-                    ft.Text("v0.2.0", size=11, color=T.INK3),
+                    ft.Text("v0.3.1", size=11, color=T.INK3),
                     self.bottom_sel,
                     ft.Container(expand=True), self.status_bar], spacing=8),
             padding=ft.padding.symmetric(vertical=6, horizontal=14),
@@ -1445,7 +1445,7 @@ def _selftest_watchdog(sess):
 
 def main_entry():
     if "--version" in sys.argv:
-        print("cx-pilot 0.2.0")
+        print("cx-pilot 0.3.1")
         return
     if "--selftest" in sys.argv:
         # 端到端渲染自检：隐藏窗口起真 Flet 客户端（不抢单实例锁，可与主程序并行）
