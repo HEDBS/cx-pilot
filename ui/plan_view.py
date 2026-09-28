@@ -181,6 +181,11 @@ def apply_card_state(card, selected, excluded, work=None):
         apply_audit_state(card, work)
 
 
+def _sink(t):
+    """A1 排序键：0=可作答(或未审核，先当正常) 1=审核判不可作答 → 沉底。"""
+    return 1 if t.get("solvable") is False else 0
+
+
 class PlanView:
     """一个会话一棵树：外部通过 refresh(tasks) 喂数据。
     data: 跨会话共享的 state dict（selected/excluded 从这里实时读——数据共享、控件实例绝不共享）。
@@ -432,8 +437,11 @@ class PlanView:
         for t in self.tasks:
             apply_card_state(self._cards[t["key"]], t["key"] in self.selected,
                              t["course"] in self.excluded, t)
+        _bad = {t["key"] for t in self.tasks if t.get("solvable") is False}
         courses = sorted(self._courses(),
-                         key=lambda c: (c in self.excluded,))
+                         key=lambda c: (c in self.excluded,
+                                         not [t for t in self.tasks
+                                              if t["course"] == c and t["key"] not in _bad],))
         self._restore = None
         # B3d-2（动效断链根因）：Flet 的树 diff 用 SequenceMatcher 按对象 id 匹配 children
         # （flet/core/control.py build_update_commands）。换模式时若 stack.children 的相对
@@ -458,7 +466,9 @@ class PlanView:
                 h.height = 32
                 head_kids.append(h)                # 列头排在卡后：列序变化只搅动列头（无需动画）
                 y = HDR_H
-                for t in [w for w in self.tasks if w["course"] == c]:
+                col = [w for w in self.tasks if w["course"] == c]
+                col = sorted(col, key=lambda w: (_sink(w), w.get("ts", 9e15)))
+                for t in col:
                     el = self._cards[t["key"]]
                     el._lx, el._ly = x, y
                     el.left, el.top = x, y
@@ -466,8 +476,13 @@ class PlanView:
                     y += el.height + CARD_GAP
             kids = card_kids + head_kids
         else:
-            active = sorted([t for t in self.tasks if t["course"] not in self.excluded],
-                            key=lambda t: t.get("ts", 9e15))
+            _good = sorted([t for t in self.tasks
+                            if t["course"] not in self.excluded and _sink(t) == 0],
+                           key=lambda t: t.get("ts", 9e15))
+            _dead = sorted([t for t in self.tasks
+                            if t["course"] not in self.excluded and _sink(t) == 1],
+                           key=lambda t: t.get("ts", 9e15))
+            active = _good + _dead          # 不可作答自动按灰排最后（A1-排序）
             sunk = [t for t in self.tasks if t["course"] in self.excluded]
             per = max(1, (len(active) + 1) // 2)
             buckets = [active[:per], active[per:] + sunk]

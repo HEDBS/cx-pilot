@@ -258,7 +258,8 @@ def apply_audit_result(t, r):
             t["qn"] = t["qreal"]
     else:
         reason = r.get("reason", "")
-        t["pill"] = {"非作业": "非作业", "无题": "无题"}.get(reason, "读不到题")
+        t["pill"] = {"非作业": "非作业", "无题": "无题",
+                     "缺班级信息": "读不到题"}.get(reason, "读不到题")
         t["pcls"] = "grey"
         state["selected"].discard(t["key"])   # 不可作答永不进解题队列（含审核前被勾上的）
 

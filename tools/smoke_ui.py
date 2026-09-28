@@ -808,14 +808,15 @@ def t_second_session():
 
 
 def t_works_blacklist():
-    """B4h P0-2：getAllWork 列表页混有「随堂练习/分组任务(PBL)/测验/考试」等非作业条目，
-    按标题黑名单剔除（词表=core.works.TITLE_EXCLUDES 常量，用户可直接增删）。
-    任务书验收：构造假数据，只留「作业B1」。"""
-    for kw in ("随堂练习", "分组任务", "PBL", "测验", "考试"):
-        assert kw in W.TITLE_EXCLUDES, "词表缺关键词: %s" % kw
-    assert W._excluded_title("随堂练习1——List"), "「随堂练习」应被剔除"
+    """v0.3.1 修订：随堂练习不再入口剔除（很多课的随堂练习本质是作业）——
+    能不能做由审核层领卷验真定夺。入口只排除确定不是作业的「分组任务/PBL」。
+    锁死：随堂练习必须放行（回归防护）。"""
+    assert "分组任务" in W.TITLE_EXCLUDES and "PBL" in W.TITLE_EXCLUDES
+    for kw in ("随堂练习", "测验", "考试"):
+        assert kw not in W.TITLE_EXCLUDES, "「%s」不应再被入口误杀（审核层接管）" % kw
+    assert not W._excluded_title("随堂练习1——List"), "「随堂练习」应入库交审核判定"
+    assert not W._excluded_title("第五章测验"), "「测验」应入库交审核判定"
     assert W._excluded_title("分组任务(PBL)——第2周"), "「分组任务/PBL」应被剔除"
-    assert W._excluded_title("第五章测验"), "「测验」应被剔除"
     assert not W._excluded_title("作业B1"), "真作业不应误杀"
     assert not W._excluded_title(""), "空标题不炸"
     # 解析级：假 getAllWork HTML 4 条 → 只有真作业入库
@@ -831,8 +832,46 @@ def t_works_blacklist():
                 return "<a href='/work/getAllWork?courseid=9&clazzid=8&cpi=7'>w</a>"
             return wl
     ws = W._works_of_course(FC(), "9", "8", "7", "《课程A》")
-    assert [w.title for w in ws] == ["作业B1"], \
-        "非作业条目应被剔除，实际入库: %s" % [w.title for w in ws]
+    assert [w.title for w in ws] == ["随堂练习1——List", "期中测验", "作业B1"], \
+        "v0.3.1: 仅「分组任务(PBL)」入口剔除，其余交审核验真: %s" % [w.title for w in ws]
+
+
+def t_unsolvable_sinks_to_bottom():
+    """A1-排序（v0.3.1）：solvable=False 的卡在科目列与时间流都必须沉到最后，
+    任何可作答卡不得出现在不可作答卡之下/之后。"""
+    p = S.plan
+    orig = list(app_v2.state["tasks"])
+    try:
+        f2 = sorted(app_v2.make_fake_tasks(), key=lambda t: t["ts"])
+        f2[0]["solvable"] = False   # 最早截止的两份被判不可作答 → 若按旧逻辑它们会排最前
+        f2[1]["solvable"] = False
+        app_v2.state["tasks"] = f2
+        p.refresh(f2)
+
+        def order_check(mode):
+            p.mode = mode
+            p.layout()
+            groups = ({c for c in (t["course"] for t in f2)} if mode == "course" else [None])
+            for g in groups:
+                arr = [t for t in f2 if g is None or t["course"] == g]
+                arr.sort(key=lambda t: (p._cards[t["key"]]._lx, p._cards[t["key"]]._ly))
+                seen_dead = False
+                for t in arr:
+                    if t.get("solvable") is False:
+                        seen_dead = True
+                    else:
+                        assert not seen_dead, \
+                            "%s/%s：可作答卡排在了不可作答卡后面" % (mode, g)
+        order_check("course")
+        order_check("time")
+        # 精确位：科目列里死卡必须在该列最后一张
+        c = f2[0]["course"]
+        p.mode = "course"; p.layout()
+        col = sorted([t for t in f2 if t["course"] == c], key=lambda t: p._cards[t["key"]]._ly)
+        assert col[-1] is f2[0], "科目列：不可作答卡应为该列最底"
+    finally:
+        app_v2.state["tasks"] = orig
+        p.refresh(orig)
 
 
 def t_qn_pending_and_backfill():
@@ -1320,7 +1359,7 @@ TESTS = [t_fake_data, t_empty_placeholder, t_course_layout, t_persistent_instanc
          t_seg_switch_no_refresh, t_eye_icon_visible, t_head_click_split,
          t_progress_bar, t_wheel_single_scrollable, t_refresh_menu_single,
          t_animation_450, t_second_session,
-         t_works_blacklist, t_qn_pending_and_backfill,
+         t_works_blacklist, t_unsolvable_sinks_to_bottom, t_qn_pending_and_backfill,
          t_vision_chain_present, t_vision_solver_chain,
          t_vision_settings_block, t_need_manual_card,
          t_audit_task_core, t_audit_card_render,

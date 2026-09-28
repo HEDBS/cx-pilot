@@ -105,6 +105,15 @@ def audit_task(client, task, force=False):
             # 签到/续签合同/阅读类……非作业连领卷都不用发（etype 本地判定，零请求）
             res = {"audited": True, "solvable": False, "reason": "非作业",
                    "qreal": 0, "preview": ""}
+        elif not (task.get("classId") or ""):
+            # v0.3.1：活动/实践类任务 url 常缺 clazzid——缺班级号领不了卷，
+            # 归"读不到（缺班级信息）"，不发无效请求（此前裸打 isExpire 把
+            # json 原始报错 'Expecting value...' 喷进日志）。缓存，4h 内不重试。
+            res = {"audited": True, "solvable": False,
+                   "reason": "缺班级信息", "qreal": 0, "preview": ""}
+            res["from_cache"] = False
+            _cache_put(key, {k: v for k, v in res.items() if k != "from_cache"})
+            return res
         else:
             qs, _ctx = questions.fetch_work_questions(
                 client, task.get("courseId", ""), task.get("classId", ""),

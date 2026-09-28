@@ -31,10 +31,17 @@ class Task:
 
 
 def _ids_from_url(url):
-    m = re.search(r"courseid=(\d+).*?clazzid=(\d+).*?cpi=(\d+)", url or "")
-    if m:
-        return m.group(1), m.group(2), m.group(3)
-    return "", "", ""
+    """三 id 独立解析：url 缺任一参数不再整体返空（v0.3.1 修：马原课程实践类
+    活动任务 url 无 clazzid，旧版三连正则返全空 → isExpire?classId=<空> → 服务端
+    非 JSON → 审核日志吐 'Expecting value' 原始 json 错）。"""
+    u = url or ""
+    def one(*keys):
+        for k in keys:
+            m = re.search(k + r"=(\d+)", u, re.I)
+            if m:
+                return m.group(1)
+        return ""
+    return one("courseid", "courseId"), one("clazzid", "clazzid", "classid"), one("cpi")
 
 
 def fetch_near_tasks(client: Client):

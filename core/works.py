@@ -12,9 +12,9 @@ from core.client import Client, BASE, DATA, strip_html
 
 MOOC = "https://mooc1.chaoxing.com"
 
-# B4h P0-2（docs/TASK-B4h.md）：getAllWork 列表页混有非作业条目，按标题黑名单剔除。
-# 词表常量，用户可直接增删；命中任一关键词的标题不入库。
-TITLE_EXCLUDES = ("随堂练习", "分组任务", "PBL", "测验", "考试")
+# 列表页标题剔除词表（v0.3.1 修订）：随堂练习不再剔除——很多课的"随堂练习"
+# 本质就是作业；能不能做交给审核层（audit 领卷验真）判定，不在入口误杀。
+TITLE_EXCLUDES = ("分组任务", "PBL")
 
 
 def _excluded_title(title):
@@ -80,7 +80,7 @@ def _works_of_course(client, cid, cls, cpi, name):
             wid, waid, title = a.group(1), a.group(2), a.group(4)
         else:
             wid, waid, title = b.group(1), b.group(2), b.group(3)
-        if _excluded_title(title):       # B4h P0-2：随堂练习/分组任务/PBL/测验/考试 不入库
+        if _excluded_title(title):       # B4h：非作业条目不入库（随堂练习保留，由审核验真）
             continue
         st = re.search(r"<strong>\s*([^<]+?)\s*</strong>", blk)
         end = re.search(r"截止时间：</span>([^<]+)", blk)
