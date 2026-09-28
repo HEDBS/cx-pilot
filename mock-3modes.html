@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  :root{
+    --blue:#0A84FF;--blue-soft:rgba(10,132,255,.12);--bg:#F2F2F7;--card:#FFF;
+    --ink:#1C1C1E;--ink2:#6E6E73;--ink3:#AEAEB2;--sep:rgba(60,60,67,.12);
+    --red:#FF3B30;--orange:#FF9F0A;--green:#34C759;--purple:#5E5CE6;--mauve:#AF52DE;--gray:#8E8E93;
+    --radius:14px;--shadow:0 1px 2px rgba(0,0,0,.04),0 6px 20px rgba(0,0,0,.06);
+  }
+  body{font-family:"PingFang SC","Microsoft YaHei",-apple-system,sans-serif;
+       background:#B8BEC9;padding:24px;color:var(--ink)}
+  .win{width:1120px;border-radius:16px;overflow:hidden;background:var(--card);
+       box-shadow:0 24px 80px rgba(0,0,0,.35)}
+  .titlebar{height:50px;display:flex;align-items:center;padding:0 16px;
+       background:rgba(246,246,248,.82);backdrop-filter:blur(20px);border-bottom:1px solid var(--sep)}
+  .lights{display:flex;gap:8px}.lights i{width:12px;height:12px;border-radius:50%}
+  .r{background:#FF5F57}.y{background:#FEBC2E}.g{background:#28C840}
+  .title{margin-left:16px;font-size:13px;font-weight:600;color:var(--ink2)}
+  .title b{color:var(--ink)}
+  .toolbar{display:flex;align-items:center;gap:10px;padding:14px 20px 10px}
+  .h1{font-size:20px;font-weight:700;letter-spacing:-.02em}
+  .seg{display:flex;background:rgba(120,120,128,.12);border-radius:9px;padding:2px;margin-left:6px}
+  .seg span{font-size:12.5px;padding:5px 13px;border-radius:7px;color:var(--ink2);cursor:pointer;user-select:none}
+  .seg span.on{background:#fff;color:var(--ink);font-weight:600;box-shadow:0 1px 4px rgba(0,0,0,.12)}
+  .btn{font-size:12.5px;font-weight:600;border:none;padding:7px 15px;border-radius:9px;cursor:pointer}
+  .btn.blue{background:var(--blue);color:#fff}
+  .btn.grey{background:#fff;color:var(--ink2);box-shadow:0 0 0 1px var(--sep) inset;font-weight:500}
+  .stage{background:var(--bg);padding:10px 20px 4px;overflow:auto}
+  .canvas{position:relative;margin:0 auto}
+  .canvas.instant,.canvas.instant *{transition:none !important}
+
+  .card{background:var(--card);border-radius:var(--radius);box-shadow:var(--shadow);
+        position:absolute;overflow:hidden;
+        transition:top .45s cubic-bezier(.3,.8,.3,1),left .45s cubic-bezier(.3,.8,.3,1),
+        width .45s cubic-bezier(.3,.8,.3,1),opacity .3s}
+  .card.excluded{opacity:.35}
+  .row{display:flex;align-items:flex-start;padding:14px 16px;gap:12px}
+  .chk{width:20px;height:20px;border-radius:50%;border:1.6px solid var(--ink3);flex:none;cursor:pointer;margin-top:3px}
+  .chk.on{background:var(--blue);border-color:var(--blue);position:relative}
+  .chk.on::after{content:"✓";color:#fff;font-size:11px;font-weight:800;position:absolute;inset:0;
+       display:flex;align-items:center;justify-content:center}
+  .body{flex:1;min-width:0}
+  .r-title{font-size:14.5px;font-weight:600;letter-spacing:-.01em;line-height:1.45}
+  .r-sub{font-size:12.5px;color:var(--ink2);margin-top:4px;line-height:1.5}
+  .r-meta{margin-left:auto;display:flex;align-items:center;gap:9px;flex:none;padding-top:2px}
+  .pill{font-size:11.5px;font-weight:600;padding:4px 11px;border-radius:999px;white-space:nowrap}
+  .pill.urgent{background:rgba(255,59,48,.13);color:var(--red)}
+  .pill.warn{background:rgba(255,159,10,.15);color:#C77700}
+  .pill.ok{background:rgba(52,199,89,.14);color:#1D8F3E}
+  .qn{font-size:12px;color:var(--ink2);white-space:nowrap}
+
+  .col-h{position:absolute;height:32px;display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none;
+       transition:top .45s cubic-bezier(.3,.8,.3,1),left .45s cubic-bezier(.3,.8,.3,1),opacity .25s}
+  .col-h.hidden{opacity:0;pointer-events:none}
+  .col-h .dot{width:10px;height:10px;border-radius:50%;flex:none}
+  .col-t{font-size:13.5px;font-weight:700;letter-spacing:-.01em;white-space:nowrap}
+  .col-n{font-size:11px;color:var(--ink3);font-weight:600}
+  .eye{font-size:11px;color:var(--blue);opacity:0;transition:opacity .2s}
+  .col-h:hover .eye{opacity:1}
+  .ex-flag{font-size:10.5px;color:var(--ink2);background:rgba(120,120,128,.12);
+       padding:2.5px 9px;border-radius:999px;margin-left:auto;white-space:nowrap}
+
+  .restorebar{position:absolute;display:flex;align-items:center;gap:8px;height:34px;
+       transition:top .45s cubic-bezier(.3,.8,.3,1),left .45s cubic-bezier(.3,.8,.3,1),opacity .25s}
+  .restorebar.hidden{opacity:0;pointer-events:none}
+  .restorebar .ex-flag{cursor:pointer;margin-left:0}
+
+  .bottombar{display:flex;align-items:center;gap:12px;padding:11px 15px;margin:14px 20px 16px;
+       background:rgba(255,255,255,.92);backdrop-filter:blur(16px);border-radius:var(--radius);
+       box-shadow:var(--shadow);font-size:12.5px;color:var(--ink2)}
+  .bottombar b{color:var(--ink)}
+  .runbtn{background:#1C1C1E;color:#fff;font-size:13px;font-weight:600;padding:8px 18px;
+       border-radius:9px;margin-left:auto;border:none;cursor:pointer}
+  .note{width:1120px;margin:12px auto 0;font-size:11.5px;color:#3A3F47;opacity:.85;line-height:1.7}
+</style>
+</head>
+<body>
+<div class="win">
+  <div class="titlebar">
+    <div class="lights"><i class="r"></i><i class="y"></i><i class="g"></i></div>
+    <div class="title"><b>cx-pilot</b> — 作业计划</div>
+    <div style="margin-left:auto;display:flex;gap:8px">
+      <button class="btn grey">⟳ 刷新</button>
+      <button class="btn blue">全选待做</button>
+    </div>
+  </div>
+  <div class="toolbar">
+    <div class="h1">作业计划</div>
+    <div class="seg" id="seg">
+      <span data-v="course" class="on">科目列</span>
+      <span data-v="time">时间流</span>
+    </div>
+    <div style="margin-left:auto;font-size:12px;color:var(--ink2)">点列头 👁 隐藏科目（变灰沉底），再点恢复</div>
+  </div>
+  <div class="stage"><div class="canvas" id="canvas"></div></div>
+  <div class="bottombar">
+    <span>已选 <b id="seln">0</b> 份</span>
+    <span>共 <b id="visn">0</b> 份待做</span>
+    <span>提交：<b>人工确认</b></span>
+    <button class="runbtn">开始解题 ▸</button>
+  </div>
+</div>
+<div class="note">① 科目列：列宽固定、卡片随标题长度自然撑高，课程超出宽度时横向滚动 ② 切「时间流」：列标题淡出，卡片位移动画重排进两列瀑布 ③ 黑名单科目在时间流中置灰沉底仍可见可勾选，底部出现「点我全部恢复」。</div>
+
+<script>
+const DATA=[
+ {course:"软件开发安全",color:"var(--red)",works:[
+   {id:"w1",title:"2026第一次作业（覆盖第1-3章：安全模型、威胁分类与访问控制机制）",sub:"截止 9-27 23:59",due:4,qn:56,pill:"剩余 4 小时",pcls:"urgent",sel:true}]},
+ {course:"前端开发技术(2025级)",color:"var(--orange)",works:[
+   {id:"w2",title:"线上学习作业2 — 内置对象 Math、Date、RegExp",sub:"截止 9-27 23:23",due:4,qn:12,pill:"剩余 4 小时",pcls:"urgent",sel:true},
+   {id:"w2b",title:"实验一 JavaScript 基本使用",sub:"9-27 23:23",due:4,qn:5,pill:"4 小时",pcls:"urgent",sel:false}]},
+ {course:"课程A",color:"var(--purple)",works:[
+   {id:"w3",title:"作业B1",sub:"9-30 17:12",due:72,qn:8,pill:"3 天",pcls:"warn",sel:false}]},
+ {course:"数据库原理",color:"var(--mauve)",works:[
+   {id:"w4",title:"自学测试：关系代数与 SQL 综合",sub:"9-30 23:41",due:72,qn:10,pill:"3 天",pcls:"warn",sel:false}]},
+ {course:"Java高级编程25级",color:"var(--green)",works:[
+   {id:"w5",title:"随堂练习1 — List 集合部分",sub:"10-03 23:55",due:144,qn:15,pill:"6 天",pcls:"ok",sel:false},
+   {id:"w6",title:"随堂练习2 — Set 部分",sub:"10-03 23:55",due:144,qn:14,pill:"6 天",pcls:"ok",sel:false}]},
+ {course:"马克思主义基本原理",color:"var(--gray)",works:[
+   {id:"w7",title:"课程实践：社会调查小论文",sub:"未设截止",due:999,qn:1,pill:"—",pcls:"ok",sel:false}]},
+];
+const excluded=new Set(); let mode="course";
+const canvas=document.getElementById("canvas");
+const cards={},heads={};
+const COLW=330, GAP=16, PAD=0, HDR=44;
+
+// 建常驻元素（只建一次 → 动画依赖同一元素改坐标）
+DATA.forEach(c=>{
+  const h=document.createElement("div");h.className="col-h";
+  h.innerHTML=`<span class="dot" style="background:${c.color}"></span><span class="col-t">${c.course}</span>
+    <span class="col-n">${c.works.length}</span><span class="eye">👁 隐藏</span><span class="ex-flag" style="display:none">已隐藏</span>`;
+  h.onclick=()=>toggleEx(c.course);
+  canvas.appendChild(h);heads[c.course]=h;
+  c.works.forEach(w=>{
+    const el=document.createElement("div");el.className="card";
+    el.innerHTML=`<div class="row"><div class="chk ${w.sel?"on":""}"></div>
+      <div class="body"><div class="r-title">${w.title}</div><div class="r-sub">${c.course} · ${w.sub}</div></div>
+      <div class="r-meta"><span class="qn">${w.qn} 题</span><span class="pill ${w.pcls}">${w.pill}</span></div></div>`;
+    el.querySelector(".chk").onclick=()=>{w.sel=!w.sel;
+      el.querySelector(".chk").classList.toggle("on",w.sel);updateBar()};
+    canvas.appendChild(el);cards[w.id]=el;
+  });
+});
+const restorebar=document.createElement("div");
+restorebar.className="restorebar hidden";
+restorebar.innerHTML=`<span class="ex-flag">以下科目已隐藏 · 点我全部恢复</span>`;
+restorebar.onclick=()=>{excluded.clear();layout();};
+canvas.appendChild(restorebar);
+
+function measure(el,w){el.style.width=w+"px";return el.offsetHeight;}
+
+function layout(animate=true){
+  if(!animate){canvas.classList.add("instant");}
+  const innerW=canvas.parentElement.clientWidth-40; // stage padding
+  const cols=[...DATA].sort((a,b)=>(excluded.has(a.course)-excluded.has(b.course))||0);
+  if(mode==="course"){
+    const totalW=cols.length*COLW+(cols.length-1)*GAP;
+    canvas.style.width=Math.max(totalW,innerW)+"px";
+    let maxH=0;
+    cols.forEach((c,i)=>{
+      const x=i*(COLW+GAP);
+      const h=heads[c.course];h.classList.remove("hidden");
+      h.style.left=x+"px";h.style.top="2px";h.style.width=COLW+"px";
+      h.querySelector(".eye").style.display=excluded.has(c.course)?"none":"";
+      h.querySelector(".ex-flag").style.display=excluded.has(c.course)?"":"none";
+      let y=HDR;
+      c.works.forEach(w=>{
+        const el=cards[w.id];
+        const mh=measure(el,COLW);
+        el.style.left=x+"px";el.style.top=y+"px";
+        el.classList.toggle("excluded",excluded.has(c.course));
+        y+=mh+10;
+      });
+      maxH=Math.max(maxH,y);
+    });
+    canvas.style.height=maxH+8+"px";
+    restorebar.classList.add("hidden");
+  }else{
+    const colN=2, colW=COLW;                      // 与科目列同款卡片
+    const totalW=colN*colW+(colN-1)*GAP;
+    const offX=Math.max(0,(innerW-totalW)/2);      // 两列居中
+    const all=DATA.flatMap(c=>c.works.map(w=>({w,c})));
+    const active=all.filter(o=>!excluded.has(o.c.course)).sort((a,b)=>a.w.due-b.w.due);
+    const sunk=all.filter(o=>excluded.has(o.c.course));
+    const per=Math.ceil(active.length/colN);
+    const buckets=[active.slice(0,per),active.slice(per)];
+    buckets[1].push(...sunk);
+    const sunkY={};
+    canvas.style.width=Math.max(innerW,totalW)+"px";
+    Object.values(heads).forEach(h=>h.classList.add("hidden"));
+    const heights=[];
+    buckets.forEach((arr,bi)=>{
+      const x0=offX+bi*(colW+GAP);let y=2;
+      arr.forEach((o,idx)=>{
+        const isSunkStart=(bi===colN-1)&&excluded.has(o.c.course)&&
+                          arr.slice(0,idx).every(pp=>!excluded.has(pp.c.course));
+        if(isSunkStart){sunkY[idx]=y; y+=44;}
+        const el=cards[o.w.id];
+        el.style.width=colW+"px";const mh=measure(el,colW);
+        el.style.left=x0+"px";el.style.top=y+"px";
+        el.classList.toggle("excluded",excluded.has(o.c.course));
+        y+=mh+10;
+      });
+      heights.push(y);
+    });
+    const si=Object.keys(sunkY).length?Number(Object.keys(sunkY)[0]):-1;
+    if(si>=0){
+      restorebar.style.left=offX+(colN-1)*(colW+GAP)+"px";
+      restorebar.style.top=sunkY[si]+"px";restorebar.style.width=colW+"px";
+      restorebar.classList.remove("hidden");
+    }else restorebar.classList.add("hidden");
+    canvas.style.height=Math.max(...heights,40)+8+"px";
+  }
+  const st=document.querySelector(".stage");
+  if(mode==="course"){st.style.overflowX="auto";st.style.overflowY="hidden";}
+  else{st.style.overflowX="hidden";st.style.overflowY="auto";}
+  if(!animate){requestAnimationFrame(()=>requestAnimationFrame(()=>canvas.classList.remove("instant")));}
+}
+function toggleEx(course){
+  excluded.has(course)?excluded.delete(course):excluded.add(course);
+  layout();
+}
+function updateBar(){
+  const all=DATA.flatMap(c=>c.works);
+  document.getElementById("seln").textContent=all.filter(w=>w.sel).length;
+  document.getElementById("visn").textContent=all.length;
+}
+document.getElementById("seg").addEventListener("click",e=>{
+  const b=e.target.closest("span[data-v]");if(!b)return;
+  [...e.currentTarget.children].forEach(x=>x.classList.toggle("on",x===b));
+  mode=b.dataset.v;layout();
+  stage.scrollLeft=0;stage.scrollTop=0;  // 切换强制归正
+});
+const stage=document.querySelector(".stage");
+window.addEventListener("resize",()=>layout(false));
+layout(false);updateBar();
+</script>
+</body>
+</html>
