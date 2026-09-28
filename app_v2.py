@@ -15,9 +15,16 @@ update）；stack 子级顺序恒定保 450ms 位移动画；列头眼睛常显�
 B3e/B4 清账（任务书 docs/TASK-B4.md）：两按钮合并为单个 PopupMenuButton「刷新」
 （菜单=临期刷新/全课程扫描）；忙碌文字改独立 Text（按钮标签永不改写，修一闪而过 bug）；
 眼睛图标矢量化见 ui/plan_view.py。
+
+A1 作业审核（任务书 docs/TASK-A1.md）：刷新 merge 完成后 start_audit() 起后台线程
+【串行】逐条 core.audit.audit_task（只 GET 领卷，4h 缓存零请求），每条结果回填 task
+dict 后经 safe_update 链路原地刷卡（三态渲染见 ui/plan_view.py）；audit_gen 代际号
+取消旧线程（同 scan_gen）；解题队列入口 queueable_keys() 滤掉不可作答。红线：
+submitter/confirm 闸门零改动。
 """
 import datetime
 import os
+import random
 import sys
 import threading
 import time
@@ -30,7 +37,7 @@ import flet as ft
 from core.client import Client, DATA, NoCredentials, save_credentials
 from runtime.tray import build_tray
 from core import providers as pv
-from core import stat2, works, questions, solver, submitter
+from core import stat2, works, questions, solver, submitter, audit
 from core import theme as T
 from ui.plan_view import PlanView, build_card, qn_label
 
@@ -43,7 +50,8 @@ state = {"client": None, "tasks": [], "jobs": {}, "log": [],
          "stop_flag": threading.Event(),
          "running": False, "approve": set(), "update_errors": [],
          "pages": {},          # B3c: session_id → Session（每会话一棵独立控件树）
-         "update_count": 0, "refreshing": False}
+         "update_count": 0, "refreshing": False,
+         "audit_gen": 0}       # A1: 审核线程代际号（同 scan_gen 取消模式）
 
 _pages_lock = threading.Lock()
 
@@ -119,7 +127,7 @@ def make_fake_tasks():
         out.append({"key": "w:%s:f%d" % (cid, i), "course": course, "courseId": cid,
                     "classId": "c1", "cpi": "1", "workId": "f%d" % i, "answerId": "0",
                     "title": title, "sub": sub, "pill": pill, "pcls": pcls, "qn": qn,
-                    "ts": ts, "status": "待做", "src": "fake", "url": ""})
+                    "ts": ts, "status": "待做", "src": "fake", "url": "", "etype": "work"})
     return out
 
 
@@ -197,7 +205,8 @@ def norm_stat2():
                     "workId": t.task_id, "answerId": "0", "title": t.name,
                     "sub": "截止 %s" % t.end_date, "pill": rem or t.end_date,
                     "pcls": "urgent" if urgent else "warn", "qn": t.question_num,
-                    "ts": t.end_time, "status": "待做", "src": "stat2", "url": t.url})
+                    "ts": t.end_time, "status": "待做", "src": "stat2", "url": t.url,
+                    "etype": t.event_type or "work"})   # A1 透传：审核据此零请求判非作业
     return out, snap.get("generated", "")
 
 
@@ -218,7 +227,7 @@ def norm_works(progress=None):
                     "sub": "截止 %s" % (w.deadline or "未设"), "pill": "",
                     "pcls": T.urgency_pill(w.deadline_ts), "qn": 0,
                     "ts": w.deadline_ts, "status": w.status or "待做",
-                    "src": "getAllWork", "url": ""})
+                    "src": "getAllWork", "url": "", "etype": "work"})  # 扫描链只收作业
     return out
 
 
@@ -231,6 +240,89 @@ def merge_tasks(new):
             have.add(t["key"])
             n += 1
     return n
+
+
+# ============ A1 作业审核（扫描后自动"验卷"，只 GET 领卷） ============
+AUDIT_SLEEP = 1.5           # 串行逐条间隔（+0~1s 抖动）；冒烟 monkeypatch 调小
+
+
+def apply_audit_result(t, r):
+    """审核结果回填 task dict（共享数据），灰卡即时剔除已勾选项。
+    可作答 → qn 回填真实题数（B4h 同链路，卡上「待领卷」刷成 N 题）。"""
+    t["audited"] = True
+    t["solvable"] = bool(r.get("solvable"))
+    t["qreal"] = int(r.get("qreal", 0))
+    t["preview"] = r.get("preview", "")
+    if t["solvable"]:
+        if t["qreal"]:
+            t["qn"] = t["qreal"]
+    else:
+        reason = r.get("reason", "")
+        t["pill"] = {"非作业": "非作业", "无题": "无题"}.get(reason, "读不到题")
+        t["pcls"] = "grey"
+        state["selected"].discard(t["key"])   # 不可作答永不进解题队列（含审核前被勾上的）
+
+
+def queueable_keys():
+    """解题队列入口：state["selected"] 过滤掉 solvable=False（A1）。"""
+    byk = {t["key"]: t for t in state["tasks"]}
+    return [k for k in state["selected"] if byk.get(k, {}).get("solvable") is not False]
+
+
+def start_audit():
+    """刷新 merge 完成后触发（do_refresh finally）。gen 代际号取消旧线程——重入/再次
+    刷新时旧审核循环下个边界自毙（同 scan_gen 模式）。--selftest 0 网络：跳过。"""
+    if state.get("selftest"):
+        return
+    state["audit_gen"] = state.get("audit_gen", 0) + 1
+    threading.Thread(target=_audit_thread, args=(state["audit_gen"],),
+                     daemon=True).start()
+
+
+def _audit_thread(gen):
+    try:
+        c = get_client()
+    except Exception as e:
+        log_line("审核未执行（客户端不可用）：%s" % str(e)[:80])
+        return
+    _audit_pass(c, gen)
+
+
+def _audit_pass(c, gen):
+    """后台【串行】逐条 audit_task（内部缓存命中零请求），每条出结果经 safe_update
+    链路广播更新对应卡片；顶部 prog_text 显示「审核中 n/N」。audit_task 永不抛出。"""
+    pend = [t for t in state["tasks"] if not t.get("audited")]
+    tot = len(pend)
+    if not tot:
+        return
+    done = solv = 0
+    for t in pend:
+        if state.get("audit_gen", 0) != gen:
+            return                                    # 新刷新已接管，本线程自毙
+        try:
+            r = audit.audit_task(c, t)
+        except Exception:                             # 理论不可达（audit_task 不抛）；防御
+            continue
+        if state.get("audit_gen", 0) != gen:
+            return                                    # 领卷期间被接管：本份数据不回填，
+                                                      # 结果已在缓存里，新线程命中秒补
+        done += 1
+        apply_audit_result(t, r)
+        if t["solvable"]:
+            solv += 1
+        _busy_set("audit", "审核中 %d/%d…" % (done, tot))
+        sync_plans()
+        bottom_update()
+        safe_update()
+        log_line("审核：%s | %s → %s" % (
+            t["course"][:10], t["title"][:18],
+            "可作答 %d 题" % t["qreal"] if t["solvable"] else t.get("pill", "不可作答")))
+        if done < tot:
+            time.sleep(AUDIT_SLEEP + random.random())  # 礼貌间隔，避免领卷链连击
+    if state.get("audit_gen", 0) == gen:
+        _busy_set("audit", None)
+        safe_update()
+    log_line("审核完成 %d/%d：可作答 %d · 不可作答 %d" % (done, tot, solv, done - solv))
 
 
 def set_badge(name, count, color=None):
@@ -503,6 +595,9 @@ def do_refresh(mode, page=None):
             safe_update()   # 扫描完成后卡片立即可见（B3 主诉：以前异常被吞导致永远刷不出来）
             print("[DBG] _r(%s) safe_update 完成" % mode, flush=True)
         finally:
+            # A1：merge 完成后串行验卷。必须排在 refreshing 复位【之前】——冒烟/自测轮询
+            # refreshing=False 后会把 selftest 关掉，若那时 start_audit 还没跑，就会起真网络线程。
+            start_audit()         # selftest 模式内部跳过（0 网络）
             state["refreshing"] = False
             _busy_set(mode, None)   # 扫描真实结束才清忙碌文字（B3e-6：绝不中途清）
             if mode == "works":
@@ -586,6 +681,8 @@ def run_queue(keys):
         t = by_key.get(k)
         if not t or state["jobs"].get(k):
             continue
+        if t.get("solvable") is False:
+            continue                                  # A1 双保险：队列循环里再滤一次
         log_line("领卷：%s | %s" % (t["course"][:10], t["title"][:20]))
         try:
             qs_, ctx = questions.fetch_work_questions(
@@ -839,9 +936,9 @@ class Session:
             if state["running"]:
                 set_status("正在解题中…")
                 return
-            sel_keys = list(self.plan.selected)
+            sel_keys = queueable_keys()   # A1：不可作答（含被灰置剔除）不进队列
             if not sel_keys:
-                set_status("先在作业计划里勾选")
+                set_status("先在作业计划里勾选（可作答作业才能入队）")
                 return
             self.shell.goto("log")
             threading.Thread(target=run_queue, args=(sel_keys,), daemon=True).start()

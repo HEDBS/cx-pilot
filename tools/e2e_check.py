@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
-"""B4 全链路真环境自检（docs/TASK-B4.md）：八环逐环断言，打印 PASS/FAIL + 耗时。
+"""全链路真环境自检（docs/TASK-B4.md + docs/TASK-A1.md）：九环逐环断言，打印 PASS/FAIL + 耗时。
 
 运行：~AppData/Local/hermes/hermes-agent/venv/Scripts/python.exe tools/e2e_check.py
 纪律：submitter 环绝不 confirm=True（只 dry_run）；solver 环用自造假题不碰真作业提交链；
-provider 环走 %APPDATA%\\cx-pilot 里用户自己的设置。末尾 `E2E: x/8 PASS`。
+provider 环走 %APPDATA%\\cx-pilot 里用户自己的设置；audit 环只 GET 领卷（第 9 环，
+A1 验收=分类正确+缓存二访零请求）。末尾 `E2E: x/9 PASS`。
 """
 import json
 import os
@@ -17,6 +18,7 @@ PY = sys.executable
 
 from core.client import Client, DATA, ApiError, SessionExpired  # noqa: E402
 from core import stat2, works, questions, providers as pv, solver, submitter  # noqa: E402
+from core import audit  # noqa: E402
 
 RESULTS = []  # (name, ok, blocked, detail)
 
@@ -104,11 +106,11 @@ def r_works():
 def r_questions():
     c = Client()
     c.ensure_login()
-    # 定位《课程A》那份待做作业：优先 scan 结果，退到 gate_survey 快照
+    # 定位任一份真待做作业（不锁课程名：作业状态随学期漂移，写死会误报）
     target = None
     try:
-        for w in works.refresh_all(c, max_courses=6, delay=(0.2, 0.4)):
-            if "课程A" in w.course and w.status == "待做":
+        for w in works.refresh_all(c, max_courses=8, delay=(0.2, 0.4)):
+            if w.status == "待做":
                 target = {"courseid": w.courseid, "clazzid": w.clazzid, "cpi": w.cpi,
                           "workid": w.work_id, "answerid": w.answer_id or "0", "title": w.title}
                 break
@@ -116,23 +118,20 @@ def r_questions():
         pass
     if not target:
         gp = os.path.join(DATA, "gate_survey.json")
-        assert os.path.exists(gp), "既未扫到线代待做，也无 gate_survey.json 兜底"
-        for course in json.load(open(gp, encoding="utf-8")):
-            if "课程A" not in course.get("course", ""):
-                continue
-            for w in course.get("works", []):
-                if w.get("status") == "待做":
-                    # gate_survey 无 clazzid/cpi：从 stat2 快照里找同 workId 的行
-                    cid = course["courseId"]
-                    snap = stat2.fetch_near_tasks(c)
-                    m = next((t for t in snap["tasks"] if t.courseid == cid), None)
-                    target = {"courseid": cid, "clazzid": m.clazzid if m else "",
-                              "cpi": m.cpi if m else "", "workid": w["workId"],
-                              "answerid": w.get("answerId", "0"), "title": w["title"]}
+        if os.path.exists(gp):
+            for course in json.load(open(gp, encoding="utf-8")):
+                for w in course.get("works", []):
+                    if w.get("status") == "待做":
+                        cid = course["courseId"]
+                        snap = stat2.fetch_near_tasks(c)
+                        m = next((t for t in snap["tasks"] if t.courseid == cid), None)
+                        target = {"courseid": cid, "clazzid": m.clazzid if m else "",
+                                  "cpi": m.cpi if m else "", "workid": w["workId"],
+                                  "answerid": w.get("answerId", "0"), "title": w["title"]}
+                        break
+                if target:
                     break
-            if target:
-                break
-    assert target, "扫描/快照里都没有《课程A》待做作业"
+    assert target, "扫描/快照里没有任何待做作业（账号当前无待做=环境态，不是代码故障）"
     try:
         qs, ctx = questions.fetch_work_questions(
             c, target["courseid"], target["clazzid"], target["cpi"], target["workid"],
@@ -222,7 +221,49 @@ def r_smoke():
     return tail[-1]
 
 
-RINGS = [r_auth, r_stat2, r_works, r_questions, r_providers, r_solver, r_submitter, r_smoke]
+# ---------- 9 audit（TASK-A1：真环境 1 条，分类正确 + 缓存命中二访零请求） ----------
+@ring("9-audit")
+def r_audit():
+    c = Client()
+    c.ensure_login()
+    snap = stat2.fetch_near_tasks(c)
+    assert snap["tasks"], "临期列表为空，audit 环无处取样（不算失败但需人工看）"
+    # 真环境取 1 条：优先 work 且有题数的（验收语义：分类正确）
+    tgt = next((t for t in snap["tasks"] if (t.event_type or "work") == "work"),
+               snap["tasks"][0])
+    task = {"courseId": tgt.courseid, "classId": tgt.clazzid, "cpi": tgt.cpi,
+            "workId": tgt.task_id, "answerId": "0", "etype": tgt.event_type or "work"}
+    orig_get = c.raw_get
+    n_req = {"n": 0}
+
+    def counting_get(*a, **k):
+        n_req["n"] += 1
+        return orig_get(*a, **k)
+    c.raw_get = counting_get
+    r1 = audit.audit_task(c, task, force=True)         # 一访：真领卷（只 GET）
+    assert r1["solvable"] in (True, False) and r1.get("reason") is not None, \
+        "audit_task 返回结构异常: %s" % r1
+    if task["etype"] != "work":
+        assert r1["solvable"] is False and r1["reason"] == "非作业", "非作业分类错: %s" % r1
+    else:
+        assert (r1["solvable"] and r1["qreal"] > 0) or \
+               (not r1["solvable"] and r1["reason"] in ("无题", "读不到题")), \
+               "work 三态分类错: %s" % r1
+    n1 = n_req["n"]
+    if audit._cache_get(audit.cache_key(task)) is None:
+        # 一访结论没进缓存 = 瞬时错（超时/解析炸）：不该灰锁，也不该算 e2e 失败——如实 BLOCKED
+        raise Blocked("《%s》一访瞬时错未缓存（%s），缓存验证顺延下轮" % (
+            tgt.name[:12], r1.get("err", r1.get("reason"))))
+    r2 = audit.audit_task(c, task)                     # 二访：同 key，缓存命中 → 必须零请求
+    assert r2["from_cache"] is True, "二访未命中缓存: %s" % r2
+    assert n_req["n"] == n1, "缓存命中仍发了 %d 个请求（应零）" % (n_req["n"] - n1)
+    c.raw_get = orig_get
+    return "《%s》etype=%s → solvable=%s real=%d题；二访缓存命中零请求" % (
+        tgt.name[:14], task["etype"], r1["solvable"], r1["qreal"])
+
+
+RINGS = [r_auth, r_stat2, r_works, r_questions, r_providers, r_solver, r_submitter,
+         r_smoke, r_audit]
 
 if __name__ == "__main__":
     t_all = time.time()
@@ -233,5 +274,5 @@ if __name__ == "__main__":
     for name, ok, blocked, detail in RESULTS:
         if not ok:
             print("  ✗ %s: %s" % (name, detail), flush=True)
-    print("E2E: %d/8 PASS  (总耗时 %.0fs)" % (n_pass, time.time() - t_all), flush=True)
-    sys.exit(0 if n_pass == 8 else 1)
+    print("E2E: %d/9 PASS  (总耗时 %.0fs)" % (n_pass, time.time() - t_all), flush=True)
+    sys.exit(0 if n_pass == 9 else 1)

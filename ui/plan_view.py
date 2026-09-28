@@ -35,7 +35,14 @@ B4h（docs/TASK-B4h.md，用户授权机制）：
   EASE_IN_OUT_CUBIC_EMPHASIZED) 在 Flutter 端补间（flet 0.28 Container 有此参数），
   替代 offset 动画机制；animate 常驻实例只改属性 + safe_update 广播同批上屏。
 - P0-2 题数：getAllWork 列表页无题数字段（qn=0），卡上显示「待领卷」而非「0 题」；
-  领卷后 app_v2 回填 t["qn"] 并 sync_plans → refresh 原地改卡上 _qn_txt 文字。"""
+  领卷后 app_v2 回填 t["qn"] 并 sync_plans → refresh 原地改卡上 _qn_txt 文字。
+
+A1 作业审核三态（docs/TASK-A1.md）：
+- 卡片数据新键 audited/solvable/qreal/preview（app_v2 后台审核线程逐条回填后 sync_plans）。
+- 渲染规格：未审核 pill 后缀「待审」小字；不可作答卡整卡 opacity=0.45（黑名单沉底 0.35 更暗
+  优先）、复选框点击无效（toggle_select guard，卡体不 toggle，只保留列头眼睛钮）、
+  pill 写「非作业/读不到题/无题」；可作答卡显示真实题数徽章 + 前 2 题预览行（图题只标[图]）。
+- 常驻元素原则不破：预览行/待审小字是 build_card 一次性构造的常驻实例，回填只改文字与 visible。"""
 import textwrap
 
 import flet as ft
@@ -45,6 +52,8 @@ from core import theme as T
 CARD_PAD_V = 28       # 卡内上下 padding 之和（样张 .row padding:14px 16px）
 TITLE_LH = 21         # 14.5px * 1.45
 SUB_LH = 19           # 12.5px * 1.5
+PREVIEW_LH = 18       # A1 首题预览行（单行 ellipsis，11.5px * 1.5）
+UNSEL_OPACITY = 0.45  # A1 不可作答卡灰度（任务书 ≈0.45；沉底黑名单 0.35 更暗优先）
 HDR_H = 44
 SUNK_GAP = 44         # 恢复条与沉底卡片区之间必须留 44px（重叠事故已修）
 CARD_GAP = 10         # 卡纵向间距（样张 y+=mh+10）
@@ -63,7 +72,10 @@ def card_height(work, col_w):
     tl = len(_wrap(work["title"], tw)) or 1
     sub = "%s · %s" % (work["course"], work.get("sub", ""))
     sl = len(_wrap(sub, max(10, (col_w - 60) // 13))) or 1
-    return CARD_PAD_V + tl * TITLE_LH + 4 + sl * SUB_LH + 4
+    h = CARD_PAD_V + tl * TITLE_LH + 4 + sl * SUB_LH + 4
+    if work.get("preview"):            # A1 可作答卡多一行首题预览（单行 ellipsis）
+        h += PREVIEW_LH
+    return h
 
 
 def qn_label(qn):
@@ -73,10 +85,12 @@ def qn_label(qn):
 
 def _pill(work):
     pbg, pfg = T.pill_style(work.get("pcls", "grey"))
-    return ft.Container(ft.Text(work.get("pill", ""), size=11.5,
-                                weight=ft.FontWeight.W_600, color=pfg),
-                        bgcolor=pbg, border_radius=999,
-                        padding=ft.padding.symmetric(vertical=4, horizontal=11))
+    txt = ft.Text(work.get("pill", ""), size=11.5,
+                  weight=ft.FontWeight.W_600, color=pfg)
+    box = ft.Container(txt, bgcolor=pbg, border_radius=999,
+                       padding=ft.padding.symmetric(vertical=4, horizontal=11))
+    box._txt = txt          # A1：审核回填原地改写 pill 文字/配色（常驻实例只改属性）
+    return box
 
 
 def build_card(work, col_w, selected, on_toggle):
@@ -93,6 +107,13 @@ def build_card(work, col_w, selected, on_toggle):
         margin=ft.margin.only(top=3),                    # 样张 .chk margin-top:3px
     )
     chk.content.visible = selected
+    # A1：预览行常驻实例（可作答卡审核回填后显文字，其余时间 visible=False）
+    preview = ft.Text(work.get("preview") or "", size=11.5, color=T.INK3,
+                      no_wrap=True, overflow=ft.TextOverflow.ELLIPSIS,
+                      visible=bool(work.get("preview")))
+    pill_box = _pill(work)
+    pend = ft.Text("待审", size=10, color=T.INK3,
+                   visible=not work.get("audited"))   # A1：pill 后缀小字
     card = ft.Container(
         width=col_w,
         bgcolor=T.CARD, border_radius=T.RADIUS, shadow=T.SHADOW_CARD,
@@ -103,14 +124,16 @@ def build_card(work, col_w, selected, on_toggle):
                  [ft.Text(title_lines, size=14.5, weight=ft.FontWeight.W_600,
                           color=T.INK, style=ft.TextStyle(height=1.45)),
                   ft.Text(sub, size=12.5, color=T.INK2,
-                          style=ft.TextStyle(height=1.5))],
+                          style=ft.TextStyle(height=1.5)),
+                  preview],
                  spacing=4, expand=True),
              # 样张 .r-meta：横排「N 题 + 紧急度胶囊」右对齐（不是竖排！）
              # B4h P0-2：qn=0（getAllWork 列表页无题数）显「待领卷」，领卷回填后刷新
+             # A1：胶囊后追加「待审」小字（未审核时的轻量提示，不占独立行）
              ft.Container(
                  ft.Row([(qn_txt := ft.Text(qn_label(work.get("qn", 0)),
                                             size=12, color=T.INK2)),
-                         _pill(work)], spacing=9,
+                         pill_box, pend], spacing=9,
                         vertical_alignment=ft.CrossAxisAlignment.CENTER),
                  margin=ft.margin.only(top=2))],
             spacing=12, vertical_alignment=ft.CrossAxisAlignment.START),
@@ -125,23 +148,45 @@ def build_card(work, col_w, selected, on_toggle):
     )
     card._chk = chk
     card._qn_txt = qn_txt
-    apply_card_state(card, selected, False)
+    card._pill_box = pill_box
+    card._pend = pend
+    card._preview = preview
+    apply_card_state(card, selected, False, work)
     return card
 
 
-def apply_card_state(card, selected, excluded):
+def apply_audit_state(card, work):
+    """A1 审核三态的原地刷新（常驻实例只改属性，DESIGN 规则 4）：
+    题数徽章、pill 文字/配色、待审小字、预览行。数据来自 task dict（app_v2 回填）。"""
+    card._qn_txt.value = qn_label(work.get("qn", 0))
+    pbg, pfg = T.pill_style(work.get("pcls", "grey"))
+    card._pill_box.bgcolor = pbg
+    card._pill_box._txt.value = work.get("pill", "")
+    card._pill_box._txt.color = pfg
+    card._pend.visible = not work.get("audited")
+    prev = work.get("preview") or ""
+    card._preview.value = prev
+    card._preview.visible = bool(prev)
+
+
+def apply_card_state(card, selected, excluded, work=None):
     chk = card._chk
-    chk.border = ft.border.all(1.6, T.ACCENT if selected else T.INK3)
-    chk.bgcolor = T.ACCENT if selected else None
-    chk.content.visible = selected
-    card.opacity = 0.35 if excluded else 1.0              # 样张 .card.excluded{opacity:.35}
+    unsolvable = work is not None and work.get("solvable") is False
+    chk.border = ft.border.all(1.6, T.ACCENT if (selected and not unsolvable) else T.INK3)
+    chk.bgcolor = T.ACCENT if (selected and not unsolvable) else None
+    chk.content.visible = bool(selected and not unsolvable)
+    # A1：不可作答卡整体灰置 0.45；黑名单沉底 0.35 更暗，优先级更高
+    card.opacity = 0.35 if excluded else (UNSEL_OPACITY if unsolvable else 1.0)
+    if work is not None:
+        apply_audit_state(card, work)
 
 
 class PlanView:
     """一个会话一棵树：外部通过 refresh(tasks) 喂数据。
     data: 跨会话共享的 state dict（selected/excluded 从这里实时读——数据共享、控件实例绝不共享）。
     on_change: 选中/排除集合被本会话改动后的回调（app_v2 侧做全会话广播）。
-    tasks: [{key,course,courseId,title,workId,end,remain,qnum,status,ts}]"""
+    tasks: [{key,course,courseId,title,workId,end,remain,qnum,status,ts,
+             etype,audited,solvable,qreal,preview}]  # A1 后四键由审核线程回填，缺省=未审核"""
 
     def __init__(self, data, on_change=None):
         self._d = data
@@ -236,9 +281,11 @@ class PlanView:
     # ---------- 事件 ----------
     def toggle_select(self, work):
         k = work["key"]
+        if work.get("solvable") is False:
+            return                       # A1：不可作答卡点击无效（只保留列头眼睛钮）
         self.selected.add(k) if k not in self.selected else self.selected.discard(k)
         apply_card_state(self._cards[k], k in self.selected,
-                         work["course"] in self.excluded)   # 原地改态，不动坐标
+                         work["course"] in self.excluded, work)   # 原地改态，不动坐标
         self.on_change()                 # 广播：其它会话的树也要落同一份选中态
 
     def toggle_excluded(self, course):
@@ -261,8 +308,8 @@ class PlanView:
             if t["key"] not in self._cards:
                 self._cards[t["key"]] = build_card(
                     t, T.COLW, t["key"] in self.selected, self.toggle_select)
-            else:  # B4h P0-2：领卷回填 qn 后，常驻卡原地换字（待领卷 → N 题）
-                self._cards[t["key"]]._qn_txt.value = qn_label(t.get("qn", 0))
+            else:  # B4h P0-2：领卷回填 qn 原地换字；A1：审核回填同样只原地改属性
+                apply_audit_state(self._cards[t["key"]], t)
         for c in self._courses():
             if c not in self._heads:
                 self._heads[c] = self._build_head(c)
@@ -324,20 +371,22 @@ class PlanView:
             h.bgcolor = T.ACCENT_SOFT if hovering else None
 
     def select_course(self, course):
-        """列头大框点击：该科目全部作业全选；已全选再点则全部取消。"""
-        keys = [t["key"] for t in self.tasks if t["course"] == course]
+        """列头大框点击：该科目全部作业全选；已全选再点则全部取消。
+        A1：不可作答（solvable=False）的任务永不入选，也不受本科全选影响。"""
+        keys = [t["key"] for t in self.tasks if t["course"] == course
+                and t.get("solvable") is not False]
         if not keys:
             return
         all_on = all(k in self.selected for k in keys)
         for t in self.tasks:
-            if t["course"] != course:
+            if t["course"] != course or t.get("solvable") is False:
                 continue
             if all_on:
                 self.selected.discard(t["key"])
             else:
                 self.selected.add(t["key"])
             apply_card_state(self._cards[t["key"]], t["key"] in self.selected,
-                             t["course"] in self.excluded)
+                             t["course"] in self.excluded, t)
         self.on_change()
 
     def restore_bar(self):
@@ -379,10 +428,10 @@ class PlanView:
             self.showing_placeholder = True
             return self
         self.showing_placeholder = False
-        # 同步常驻元素的态（绝不重建实例，DESIGN 规则4）
+        # 同步常驻元素的态（绝不重建实例，DESIGN 规则4；A1：连审核态一起原地刷）
         for t in self.tasks:
             apply_card_state(self._cards[t["key"]], t["key"] in self.selected,
-                             t["course"] in self.excluded)
+                             t["course"] in self.excluded, t)
         courses = sorted(self._courses(),
                          key=lambda c: (c in self.excluded,))
         self._restore = None

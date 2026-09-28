@@ -39,7 +39,16 @@
   key本体粘贴存 api_key+免费推荐文案（monkeypatch load/save，不碰 %APPDATA% 真文件）；
   t_need_manual_card：审批卡「需人工」徽标+https补全题图+每空输入+采用写回 results，
   队列卡计数；confirm/submitter 路径零接触（红线）。
-全绿输出 SMOKE PASS 并退出码 0（31 项）。
+覆盖 TASK-A1 新增标准（作业审核三态，2026-09-28）：
+  t_audit_task_core：audit_task 三态分类（非作业零请求/可作答/无题/读不到题）、
+  缓存二访零请求（Boom 客户端实锤）、TTL 过期重判、瞬时错不缓存、坏缓存不炸、预览截断+图占位；
+  t_audit_card_render：三态渲染（待审小字/题数徽章+预览行/灰卡 0.45+pill 改写）×两布局模式、
+  黑名单沉底 0.35 优先；
+  t_audit_guard_and_queue：不可作答卡点击不 toggle、本科全选跳过、判不可作答剔除已勾、
+  queueable_keys 过滤；
+  t_audit_worker_and_trigger：selftest 跳过审核、_audit_pass 串行回填+「审核中 n/N」广播+
+  收尾清空+完成日志、gen 代际不匹配即毙。
+全绿输出 SMOKE PASS 并退出码 0（35 项）。
 
 B3c 说明：控件树按会话重建后，冒烟用一个常驻「冒烟会话」（boot() 建的 fake page +
 Session），各用例操作 S.plan / S.shell / S.log_list 等——与真会话同一条代码路径。
@@ -64,7 +73,10 @@ from core import works as W  # noqa: E402
 from core import providers as pv  # noqa: E402
 from core import solver  # noqa: E402
 from core import vision as VN  # noqa: E402
-from ui.plan_view import HDR_H  # noqa: E402
+from core import audit as AUD  # noqa: E402
+from core import client as CLIENT  # noqa: E402
+from core import questions as QM  # noqa: E402
+from ui.plan_view import HDR_H, PREVIEW_LH, UNSEL_OPACITY  # noqa: E402
 
 HEX_RE = re.compile(r"^#[0-9A-Fa-f]+$")
 
@@ -1044,6 +1056,262 @@ def t_need_manual_card():
         S.render_queue()
 
 
+# ---------- TASK-A1 作业审核 ----------
+class _BoomClient:
+    """任何请求方法都被抓：审核路径应零网络（缓存命中/etype 本地判定）。"""
+    def raw_get(self, *a, **k):
+        raise AssertionError("audit 走了网络请求（应零请求：缓存命中或非作业本地判定）")
+
+    def get_json(self, *a, **k):
+        raise AssertionError("audit 走了网络请求（应零请求）")
+
+
+def _mk_task(key, etype="work", **over):
+    t = dict(app_v2.make_fake_tasks()[0])
+    t.update({"key": key, "workId": key, "courseId": "9001", "classId": "c", "cpi": "1",
+              "answerId": "0", "etype": etype})
+    t.update(over)
+    return t
+
+
+def t_audit_task_core():
+    """A1 核心：三态分类 / 缓存读写二访零请求 / TTL 过期重判 / 预览截断 / 异常不抛出。
+    缓存文件重定向到临时目录，绝不碰 %APPDATA%\\cx-pilot 真数据；网络全 Boom/monkeypatch。"""
+    tmp = os.path.join(ROOT, "build", "smoke_audit_data")
+    os.makedirs(tmp, exist_ok=True)
+    cf = os.path.join(tmp, "audit_cache.json")
+    if os.path.exists(cf):
+        os.remove(cf)
+    orig_data = CLIENT.DATA
+    CLIENT.DATA = tmp
+    try:
+        # ① 非作业：etype 本地判定，零请求 solvable=False，且不碰 questions 链
+        t1 = _mk_task("au1", "sign")
+        r1 = AUD.audit_task(_BoomClient(), t1)
+        assert r1["solvable"] is False and r1["reason"] == "非作业", "①非作业分类: %s" % r1
+        assert r1["from_cache"] is False
+        assert os.path.exists(cf), "①缓存文件未落盘 %s" % cf
+        # ② 二访：Boom 客户端也照常返回 → 实锤缓存命中零请求
+        r1b = AUD.audit_task(_BoomClient(), t1)
+        assert r1b["from_cache"] is True and r1b["reason"] == "非作业", "②缓存命中: %s" % r1b
+        # ③ work：领卷成功 → solvable+题数+预览（第 1 题截 24 字、图题只标[图]、第 3 题不入预览）
+        long_stem = "矩阵论期末复习" * 5          # 40 字 > 24
+        qs = [{"qid": "1", "type": "single", "stem": long_stem, "image_flag": False,
+               "options": {}},
+              {"qid": "2", "type": "blank", "stem": "勿入预览文字", "image_flag": True,
+               "options": {}},
+              {"qid": "3", "type": "single", "stem": "第三题绝不该出现", "image_flag": False,
+               "options": {}}]
+        orig_fetch = QM.fetch_work_questions
+        QM.fetch_work_questions = lambda c, *a, **k: (qs, {})
+        try:
+            t2 = _mk_task("au2")
+            r2 = AUD.audit_task(object(), t2)   # 需一次领卷（monkeypatched，无真网络）
+            assert r2["solvable"] is True and r2["qreal"] == 3, "③可作答: %s" % r2
+            assert r2["preview"] == long_stem[:24] + " ▸ [图]", "③预览截断/图占位: %r" % r2["preview"]
+            r2b = AUD.audit_task(_BoomClient(), t2)
+            assert r2b["from_cache"] is True and r2b["preview"] == r2["preview"], "③二访缓存: %s" % r2b
+            # ④ 0 题 → 无题（稳定判定，缓存）
+            QM.fetch_work_questions = lambda c, *a, **k: ([], {})
+            t3 = _mk_task("au3")
+            r3 = AUD.audit_task(object(), t3)
+            assert r3["solvable"] is False and r3["reason"] == "无题", "④无题: %s" % r3
+            assert AUD.audit_task(_BoomClient(), t3)["from_cache"] is True, "④无题应缓存"
+            # ⑤a 门槛/403 → 读不到题且缓存（4h 内不会变）
+            def gate(c, *a, **k):
+                raise Exception("HTTP Error 403: Forbidden")
+            QM.fetch_work_questions = gate
+            t4 = _mk_task("au4")
+            r4 = AUD.audit_task(object(), t4)
+            assert r4["solvable"] is False and r4["reason"] == "读不到题", "⑤a 403: %s" % r4
+            assert AUD.audit_task(_BoomClient(), t4)["from_cache"] is True, "⑤a 403 应缓存"
+            # ⑤b 瞬时错（超时）→ 不缓存，二访必须重新领卷——一次抖动绝不灰锁 4h
+            n_fetch = {"n": 0}
+            def flaky(c, *a, **k):
+                n_fetch["n"] += 1
+                raise Exception("timed out")
+            QM.fetch_work_questions = flaky
+            t5 = _mk_task("au5")
+            r5 = AUD.audit_task(object(), t5)
+            assert r5["solvable"] is False and r5["reason"] == "读不到题", "⑤b 超时分类: %s" % r5
+            r5b = AUD.audit_task(object(), t5)
+            assert n_fetch["n"] == 2 and not r5b["from_cache"], \
+                "⑤b 超时结果被错误缓存（应未命中）: %s / fetch=%d" % (r5b, n_fetch["n"])
+        finally:
+            QM.fetch_work_questions = orig_fetch
+        # ⑥ TTL 过期 → 重新判定（缓存条目改旧时间戳模拟）
+        d = json.load(open(cf, encoding="utf-8"))
+        d["9001:au1"]["ts"] -= AUD.TTL + 60
+        json.dump(d, open(cf, "w", encoding="utf-8"))
+        r1c = AUD.audit_task(_BoomClient(), _mk_task("au1", "sign"))
+        assert r1c["from_cache"] is False, "⑥TTL 过期应重判"
+        # ⑦ 缓存文件损坏 → 不炸，退化为实时判定
+        open(cf, "w", encoding="utf-8").write("{not-json!!")
+        r1d = AUD.audit_task(_BoomClient(), _mk_task("au1", "sign"))
+        assert r1d["solvable"] is False and r1d["reason"] == "非作业", "⑦坏缓存应退化不炸: %s" % r1d
+    finally:
+        CLIENT.DATA = orig_data
+
+
+def t_audit_card_render():
+    """A1 三态渲染：未审核带「待审」小字；可作答=题数徽章+预览行+正常亮度；
+    不可作答=灰卡 0.45+pill 改写+预览藏。两模式（科目列/时间流）都走同一 layout 通路。"""
+    p = S.plan
+    st = app_v2.state
+    pend_t = _mk_task("ar-pend", "work", course="审核课", courseId="9101", title="待审的活")
+    solv_t = _mk_task("ar-solv", "work", course="审核课", courseId="9101", title="可做的活",
+                      qn=0, pill="剩余 2 小时", pcls="urgent")
+    unsolv_t = _mk_task("ar-unsolv", "read", course="审核课", courseId="9101",
+                        title="续签合同", pill="剩余 3 天")
+    app_v2.apply_audit_result(solv_t, {"solvable": True, "qreal": 5,
+                                       "preview": "第一题题干 ▸ [图]", "reason": ""})
+    app_v2.apply_audit_result(unsolv_t, {"solvable": False, "qreal": 0,
+                                         "preview": "", "reason": "非作业"})
+    st["tasks"] = [pend_t, solv_t, unsolv_t]
+    p.selected.clear()
+    p.excluded.clear()
+    p.mode = "course"
+    p.refresh(st["tasks"])
+    p.layout()
+    for mode in ("course", "time"):
+        if mode == "time":
+            p._seg_pick("time")
+        cards = {t["key"]: p._cards[t["key"]] for t in st["tasks"]}
+        c0, c1, c2 = cards["ar-pend"], cards["ar-solv"], cards["ar-unsolv"]
+        # 待审小字：仅未审核卡
+        assert c0._pend.visible is True, "%s：未审核卡应显示「待审」" % mode
+        assert c1._pend.visible is False and c2._pend.visible is False, "%s：已审核卡不应残留待审" % mode
+        # 可作答：题数徽章（qn 回填 5）+ 预览行上屏 + 全亮
+        assert c1._qn_txt.value == "5 题", "%s：可作答应显真实题数: %s" % (mode, c1._qn_txt.value)
+        assert c1._preview.visible is True and c1._preview.value == "第一题题干 ▸ [图]", \
+            "%s：预览行未渲染" % mode
+        assert c1.opacity == 1.0, "%s：可作答卡不该灰: %s" % (mode, c1.opacity)
+        assert c1._pill_box._txt.value == "剩余 2 小时", "可作答卡保留原紧急度 pill"
+        # 不可作答：灰卡 0.45 + pill 写「非作业」+ 无预览
+        assert c2.opacity == UNSEL_OPACITY, "%s：不可作答卡应灰置 0.45: %s" % (mode, c2.opacity)
+        assert c2._pill_box._txt.value == "非作业" and \
+            c2._pill_box.bgcolor == T.pill_style("grey")[0], "%s：pill 应写非作业灰底" % mode
+        assert c2._preview.visible is False, "%s：不可作答卡不应有预览" % mode
+        # 预览行为卡加高（仅可作答卡）
+        from ui.plan_view import card_height
+        assert card_height(solv_t, T.COLW) - card_height(dict(solv_t, preview=""), T.COLW) \
+            == PREVIEW_LH, "预览行应加高 18px"
+        if mode == "time":
+            p._seg_pick("course")
+    assert solv_t["qn"] == 5 and unsolv_t["pcls"] == "grey"
+    # 黑名单沉底 0.35 与不可作答 0.45 叠加时更暗者优先（黑名单赢）
+    p.toggle_excluded("审核课")
+    assert p._cards["ar-unsolv"].opacity == 0.35, "沉底灰卡应保持 0.35（黑名单优先）"
+    p._restore_all()
+
+
+def t_audit_guard_and_queue():
+    """A1 禁选与队列过滤：不可作答卡点击不 toggle；本科全选跳过之；审核判不可作答时
+    把审核前抢勾的项从 selected 剔除；queueable_keys 兜底过滤。"""
+    p = S.plan
+    st = app_v2.state
+    a = _mk_task("g-solv", "work", course="守卫课", courseId="9102", title="能做")
+    b = _mk_task("g-no", "contract", course="守卫课", courseId="9102", title="合同")
+    app_v2.apply_audit_result(a, {"solvable": True, "qreal": 2, "preview": "x", "reason": ""})
+    app_v2.apply_audit_result(b, {"solvable": False, "qreal": 0, "preview": "", "reason": "非作业"})
+    st["tasks"] = [a, b]
+    p.selected.clear()
+    p.excluded.clear()
+    p.mode = "course"
+    p.refresh(st["tasks"])
+    p.layout()
+    card_b = p._cards["g-no"]
+    card_b.on_click(SimpleNamespace())                # 点击不可作答卡体 = 无效
+    assert "g-no" not in p.selected, "不可作答卡点击不应入 selected"
+    card_a = p._cards["g-solv"]
+    card_a.on_click(SimpleNamespace())
+    assert "g-solv" in p.selected, "可作答卡点击应正常 toggle"
+    card_a.on_click(SimpleNamespace())
+    assert not p.selected
+    h = p._heads["守卫课"]
+    ev = SimpleNamespace(control=h, name="click")
+    h.on_click(ev)                                    # 本科全选
+    assert "g-solv" in p.selected and "g-no" not in p.selected, "本科全选应跳过不可作答"
+    h.on_click(ev)                                    # 可作答已全选 → 再点取消
+    assert not (p.selected & {"g-solv"}), "再点应取消可作答项全选"
+    # 审核前抢勾 → apply_audit_result 剔除
+    p.selected.add("g-no")
+    app_v2.apply_audit_result(b, {"solvable": False, "qreal": 0, "preview": "", "reason": "读不到题"})
+    assert "g-no" not in st["selected"], "判不可作答时应把已勾选项踢出队列"
+    assert b["pill"] == "读不到题", "读不到 pill 文案: %s" % b["pill"]
+    # 队列入口过滤：selected 里硬塞可作答+不可作答，queueable_keys 只带得进可作答
+    st["selected"].update({"g-solv", "g-no"})
+    assert sorted(app_v2.queueable_keys()) == ["g-solv"], "queueable_keys 应滤掉不可作答: %s" \
+        % app_v2.queueable_keys()
+    st["selected"].clear()
+    assert not st["selected"]
+
+
+def t_audit_worker_and_trigger():
+    """A1 触发与线程：selftest 模式 start_audit 必须直接跳过（0 网络）；gen 代际不匹配
+    即毙；_audit_pass 串行逐条回填 + 「审核中 n/N」广播（_busy_set monkeypatch 捕获，
+    audit_task monkeypatch 0 网络 0 真缓存）。"""
+    st = app_v2.state
+    g0 = st.get("audit_gen", 0)
+    st["selftest"] = True
+    app_v2.start_audit()
+    assert st.get("audit_gen", 0) == g0, "selftest 模式不得触发审核（会打真网络）"
+    st["selftest"] = False
+    try:
+        t1 = _mk_task("wk1", "work", course="线程课", courseId="9103")
+        t2 = _mk_task("wk2", "exam", course="线程课", courseId="9103")
+        t3 = _mk_task("wk3", "work", course="线程课", courseId="9103")
+        t3.update({"audited": True, "solvable": True, "qreal": 1, "preview": ""})
+        t3_qn0 = t3["qn"]
+        st["tasks"] = [t1, t2, t3]
+        S.plan.selected.clear()
+        S.plan.mode = "course"
+        S.plan.refresh(st["tasks"])
+        S.plan.layout()
+        seen_busy, calls = [], []
+        orig_busy, orig_sleep, orig_at = app_v2._busy_set, app_v2.AUDIT_SLEEP, AUD.audit_task
+        def fake_busy(mode, txt):
+            seen_busy.append(txt)
+        def fake_at(c, t, force=False):
+            calls.append(t["key"])
+            return {"audited": True, "solvable": t["key"] == "wk1",
+                    "reason": "" if t["key"] == "wk1" else "非作业",
+                    "qreal": 3 if t["key"] == "wk1" else 0, "preview": ""}
+        app_v2._busy_set = fake_busy
+        app_v2.AUDIT_SLEEP = 0.0
+        AUD.audit_task = fake_at
+        try:
+            st["audit_gen"] = 77
+            app_v2._audit_pass(object(), 77)
+        finally:
+            app_v2._busy_set, app_v2.AUDIT_SLEEP, AUD.audit_task = orig_busy, orig_sleep, orig_at
+        assert calls == ["wk1", "wk2"], "串行审核应跳过已审条目: %s" % calls
+        assert t1["solvable"] is True and t1["qn"] == 3, "可作答应回填 qn: %s" % t1.get("qn")
+        assert t2["audited"] is True and t2["solvable"] is False and t2["pill"] == "非作业"
+        assert "wk3" not in calls and t3["qn"] == t3_qn0, "已审条目不得被复审核动数据"
+        assert any(x and x.startswith("审核中 1/2") for x in seen_busy), "进度广播缺: %s" % seen_busy
+        assert any(x and x.startswith("审核中 2/2") for x in seen_busy), "进度广播缺: %s" % seen_busy
+        assert seen_busy[-1] is None, "收尾应清忙碌文字: %s" % seen_busy[-1]
+        assert any("审核完成 2/2" in l for l in st["log"]), "完成日志缺"
+        # gen 不匹配：即毙，一条都不审
+        t4 = _mk_task("wk4", "work", course="线程课", courseId="9103")
+        t4.pop("audited", None)
+        st["tasks"] = [t4]
+        calls.clear()
+        st["audit_gen"] = 78
+        app_v2._busy_set = lambda m, x: None
+        AUD.audit_task = fake_at
+        try:
+            app_v2._audit_pass(object(), 77)          # 旧代际 → 立即 return
+        finally:
+            app_v2._busy_set = orig_busy
+            AUD.audit_task = orig_at
+        assert calls == [], "gen 不匹配仍执行了审核: %s" % calls
+        st["audit_gen"] = g0 + 1
+    finally:
+        st["selftest"] = False
+
+
 TESTS = [t_fake_data, t_empty_placeholder, t_course_layout, t_persistent_instances,
          t_select_and_bottombar, t_time_mode, t_blacklist_and_restore,
          t_course_excluded_last, t_five_screens, t_log_coloring, t_queue_render,
@@ -1054,7 +1322,9 @@ TESTS = [t_fake_data, t_empty_placeholder, t_course_layout, t_persistent_instanc
          t_animation_450, t_second_session,
          t_works_blacklist, t_qn_pending_and_backfill,
          t_vision_chain_present, t_vision_solver_chain,
-         t_vision_settings_block, t_need_manual_card]
+         t_vision_settings_block, t_need_manual_card,
+         t_audit_task_core, t_audit_card_render,
+         t_audit_guard_and_queue, t_audit_worker_and_trigger]
 
 
 def main():
