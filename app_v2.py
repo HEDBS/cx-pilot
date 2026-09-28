@@ -27,7 +27,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import flet as ft
 
-from core.client import Client, DATA
+from core.client import Client, DATA, NoCredentials, save_credentials
 from runtime.tray import build_tray
 from core import providers as pv
 from core import stat2, works, questions, solver, submitter
@@ -410,6 +410,51 @@ def _progress_hide_later(delay=0.5):
     t.start()
 
 
+def show_login_dialog(sess, retry_mode):
+    """GUI 登录：账号+密码 → save_credentials → Client.login(user,pwd) → 重跑刷新。"""
+    if sess is None:
+        log_line("需要登录学习通，但当前无可用窗口")
+        return
+    uf = ft.TextField(label="学习通账号(手机号)", width=320, border_radius=T.RADIUS_BTN)
+    pf = ft.TextField(label="密码", password=True, can_reveal_password=True, width=320,
+                      border_radius=T.RADIUS_BTN)
+    err = ft.Text("", size=11.5, color=T.RED, visible=False)
+
+    def close(e):
+        sess.page.close(dlg)
+
+    def ok(e):
+        u, pw = (uf.value or "").strip(), (pf.value or "").strip()
+        if not u or not pw:
+            err.value, err.visible = "账号和密码都要填", True
+            sess.page.update()
+            return
+        def _do():
+            try:
+                cl = state["client"] or Client()
+                state["client"] = cl
+                cl.login(user=u, pwd=pw)
+                sess.page.close(dlg)
+                log_line("登录成功，凭据已存本机（%s）" % DATA)
+                do_refresh(retry_mode, page=sess.page)
+            except Exception as e2:
+                err.value, err.visible = "登录失败：%s" % str(e2)[:80], True
+                try:
+                    sess.page.update()
+                except Exception:
+                    pass
+        threading.Thread(target=_do, daemon=True).start()
+
+    dlg = ft.AlertDialog(modal=True, title=ft.Text("登录学习通（首次使用）"),
+                        content=ft.Column([
+                            ft.Text("账号仅存本机 %s，用于会话过期后自动重登。" % DATA,
+                                    size=11.5, color=T.INK2),
+                            uf, pf, err], spacing=10))
+    dlg.actions = [ft.TextButton("取消", on_click=close),
+                   solid_btn("登录", ok, bg=T.ACCENT)]
+    sess.page.open(dlg)
+
+
 def do_refresh(mode, page=None):
     if state.get("refreshing"):
         set_status("已有刷新任务在跑，稍候…")
@@ -439,6 +484,10 @@ def do_refresh(mode, page=None):
                     n = merge_tasks(ts)
                     log_line("全课程扫描完成：新增 %d 条待做" % n)
                 set_status("刷新完成")
+            except NoCredentials:
+                state["refreshing"] = False
+                set_status("请先登录学习通")
+                show_login_dialog(_session_of(page), mode)
             except Exception as e:
                 log_line("刷新失败：%s" % str(e)[:120])
                 set_status("刷新失败，见日志")
@@ -1189,6 +1238,7 @@ class Session:
 
 # ============ 组装 / 入口 ============
 def main(page: ft.Page):
+    os.environ["CXPilot_GUI"] = "1"
     # B3c：每个浏览器 tab/每次刷新都会重新进入 main()——每次都新建一整套控件树。
     # 旧版共享全局单份树 + 单份「当前 page」，多标签/重连时服务端记录树漂移 →
     # diff 非法 remove → 新会话首推就炸、永远白屏（run_v2.log 实锤）。

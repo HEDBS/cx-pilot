@@ -35,6 +35,16 @@ class ApiError(Exception):
     pass
 
 
+class NoCredentials(Exception):
+    """无本地凭据且当前环境无法交互输入（GUI/打包无 stdin）。上层负责弹登录框。"""
+    pass
+
+
+def save_credentials(user, pwd):
+    json.dump({"user": user, "pwd": pwd}, open(CRED_FILE, "w", encoding="utf-8"))
+    os.chmod(CRED_FILE, 0o600)
+
+
 def aes_encrypt(s: str) -> str:
     from aes_stdlib import aes128_cbc_encrypt
     ct = aes128_cbc_encrypt(s.encode("utf-8"), TRANSFER_KEY, TRANSFER_KEY)
@@ -98,12 +108,18 @@ class Client:
         if user is None and os.path.exists(CRED_FILE):
             cred = json.load(open(CRED_FILE, encoding="utf-8"))
             user, pwd = cred.get("user"), cred.get("pwd")
+        elif user is not None and pwd is not None:
+            save_credentials(user, pwd)   # GUI 登录框传入：先落盘再试
         if user is None:
-            import getpass
-            user = input("学习通账号(手机号): ").strip()
-            pwd = getpass.getpass("密码(不回显): ")
-            json.dump({"user": user, "pwd": pwd}, open(CRED_FILE, "w", encoding="utf-8"))
-            os.chmod(CRED_FILE, 0o600)
+            import sys
+            if sys.stdin is not None and sys.stdout is not None and sys.stdin.isatty() \
+                    and os.environ.get("CXPilot_GUI") != "1":
+                import getpass
+                user = input("学习通账号(手机号): ").strip()
+                pwd = getpass.getpass("密码(不回显): ")
+                save_credentials(user, pwd)
+            else:
+                raise NoCredentials("未配置学习通凭据（%s 不存在）" % CRED_FILE)
         html = self.raw_get("https://passport2.chaoxing.com/login?fid=-1&refer=http%3A%2F%2Fi.chaoxing.com")
 
         def hidden(name, default=""):
