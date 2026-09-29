@@ -164,16 +164,22 @@ export function errText(obj, act, e, rescue) {
 }
 
 // 长任务包装：置 busy（按钮禁用态靠它），409 busy 归一提示
+// 人话映射：用户不该看到 audit/solve 这种内部代号，也不该只被告知「被拒」
+const MODE_LABEL = { scan: "扫描", audit: "验卷（逐条核验作业能否作答）", solve: "解题", submit: "提交" };
+const modeName = (m) => MODE_LABEL[m] || m || "其它任务";
+const busyHint = (m) => `${modeName(m)}正在跑，同一时刻只允许一个任务`
+  + `；等运行日志里它显示完成后，再点一次即可；急着用可在日志屏点「取消」中断它`;
+
 export async function withBusy(mode, fn) {
   if (store.busy) {
-    store.addLog(`!! 已有任务在跑（${store.busy}），${mode} 排队被拒`, "err");
+    store.addLog(`!! ${busyHint(store.busy)}（本次${modeName(mode)}没有提交）`, "err");
     return false;
   }
   store.busy = mode; store.emit("busy");
   try { await fn(); return true; }
   catch (e) {
     if (e.status === 409 && e.detail === "busy") {
-      store.addLog(`!! 引擎忙（当前=${(e.data && e.data.current) || "?"}），稍后再试`, "err");
+      store.addLog(`!! ${busyHint((e.data && e.data.current) || "?")}（本次${modeName(mode)}没有提交）`, "err");
     } else if (e.status !== 401 && e.status !== 428) {
       store.addLog("!! " + errText(mode, "请求", e), "err");
     }
