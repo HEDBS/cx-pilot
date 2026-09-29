@@ -198,6 +198,18 @@ CHOICE_PROMPT = """你是答题引擎。从选项中选出正确答案。
 最后一行："""
 
 
+MULTI_PROMPT = """你是答题引擎。这是一道**多选题**，正确选项可能有多个（至少两个，也可能全选）。
+先在内部思考，最后一行只输出正确选项的字母，按字母顺序连写（如 ABD）。
+不要空格、不要逗号、不要其他任何字符。
+
+题目：{stem}
+
+选项：
+{options}
+
+最后一行："""
+
+
 def _extract_letter(raw, valid):
     """从模型输出提取答案字母：优先尾部/标签式，避免误抓散文里的 A/B/C/D 词。"""
     v = set(valid)
@@ -235,6 +247,51 @@ def solve_choice(cfg, keys, stem, options, max_tokens=400):
     # 置信度基线；升级路径(双采样一致性)留在 solver
     conf = 0.8 if letter in options else 0.0
     return letter, conf, raw
+
+
+def _clean_letters(s, valid):
+    """只留合法选项字母，去重 + 按字母序拼成 'ABD'。"""
+    return "".join(sorted({c for c in re.findall(r"[A-G]", s or "") if c in set(valid)}))
+
+
+def _extract_letters(raw, valid):
+    """从模型输出提取多选字母串（去重+字母序；全部合法才采用）。"""
+    first = r"[A-G][A-G\s,，、.。]*[A-G]|[A-G]"
+    # 1) 显式标签：答案：ABD / 正确答案是 ABD / 最后一行：ABD / Answer: ABD
+    for p in (r"(?:正确答案|答案|最终答案|最后一行|最终答案)\s*[是为:：]?\s*(%s)" % first,
+              r"[Aa]nswer\s*[:：]\s*(%s)" % first):
+        ms = re.findall(p, raw)
+        if ms:
+            s = _clean_letters(ms[-1], valid)
+            if s:
+                return s
+    # 2) 最后一行整行就是字母串（可带空格/顿号/句点）
+    for line in reversed([l.strip() for l in raw.splitlines() if l.strip()]):
+        if re.fullmatch(r"[（(\[]?\s*[A-G][A-G\s,，、.。]*[)）\]]?\.?。?", line):
+            s = _clean_letters(line, valid)
+            if s:
+                return s
+    # 3) 兜底：先找连续字母串（"选 ABC"/"应该是ABC三个选项" 这类夹在中文里的），
+    #    要求整串字母都在合法选项内（"FACE" 这种若含 D 以外的字母会被剔除）；
+    #    再退回全文独立单字母 token。
+    runs = [r for r in re.findall(r"[A-G]{2,}", raw) if set(r) <= set(valid)]
+    if runs:
+        return "".join(sorted(set(runs[-1])))
+    got = [c for c in re.findall(r"\b([A-G])\b", raw) if c in set(valid)]
+    return "".join(sorted(set(got)))
+
+
+def solve_multi(cfg, keys, stem, options, max_tokens=400):
+    """多选题：返回 'ABD'（字母序、无分隔）。options: dict {'A':'...','B':'...'}"""
+    opt_txt = "\n".join("%s、%s" % (k, v) for k, v in sorted(options.items()))
+    messages = [{"role": "user", "content": MULTI_PROMPT.format(stem=stem, options=opt_txt)}]
+    if cfg.get("kind") == "pollinations":
+        raw = pollinations_chat(cfg, keys, messages)
+    else:
+        raw = chat(cfg, keys, messages, max_tokens=max_tokens)
+    letters = _extract_letters(raw, options.keys())
+    conf = 0.8 if letters and set(letters) <= set(options) else 0.0
+    return letters, conf, raw
 
 
 def active_providers(settings, keys):

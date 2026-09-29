@@ -36,6 +36,38 @@ class Job:
 # ---------- B6a 识图链辅助 ----------
 _BOILER = re.compile(r"填空题|单选题|多选题|判断题|主观题|分\)?$|[\(（]\s*共?\d")
 
+# ---------- 填空/多选/简答的作答风格令 ----------
+# 用户要求（2026-09-29）：简答一类的答案要「简洁、语言平实、去 AI 味、像学生写出来的」。
+# 为什么必须写进提示词：模型默认输出「首先…其次…综上所述」+ 分点 + 加粗 + 铺陈，
+# 一眼就不是学生手写；学习通的简答输入框也根本不需要那个长度。
+_TEXT_RULES = (
+    "作答规则（逐条遵守）：\n"
+    "① 只输出答案本身。不要开场白、不要收尾总结、不要解释你在做什么，"
+    "不要任何 markdown 标记（**、##、- 列表）、不要 emoji。\n"
+    "② 像学生自己手写的答案：句子短，直说结论和理由，可以用「因为…所以…」"
+    "「也就是说」这类直白说法。\n"
+    "③ 禁用这类套话：首先/其次/再次/最后、综上所述/总而言之、值得注意的是、"
+    "在一定程度上、具有重要意义、有效地、从而、进而、随着……的发展。\n"
+    "④ 简洁优先：一句话能答清就一句话，别为显得全面而分点罗列或排比铺陈。\n"
+    "⑤ 要能手写成纯文本：矩阵按行空格分列、换行分排；分数写成 9/2 这种。\n"
+)
+
+
+def _text_prompt(q):
+    """填空/多选/简答的提示词（按题型分别收紧"最短答案"的约束）。"""
+    n = int(q.get("blank_count") or 1)
+    t = q.get("type") or ""
+    if t == "blank":
+        task = ("这是填空题，共 %d 空。每空只写答案本身（一个词/一个数/一个式子），"
+                "不要写成句子、不要解释；每行一个答案，按顺序对应每个空。" % n)
+    else:
+        # 注意：multi 不走这里（多选在 solver 里走 pv.solve_multi 出字母串，
+        # 提交器按 answertype=1 发答案{qid}=字母；丢给文本生成会回来一整句话）
+        task = ("这是简答题。用平实的话直接回答，写成一小段就行，"
+                "不要小标题、不要分点罗列、不要「首先其次」。")
+    return "%s%s\n\n题目：\n%s" % (_TEXT_RULES, task, q.get("stem") or "")
+
+
 def _stem_needs_image(stem):
     """实义字符判定：剥掉题型 boilerplate（「(填空题, 16.6分)」这种模板字）后
     不足 8 个实义字符 → 题干实质内容在图里，走识图。
@@ -144,8 +176,13 @@ def solve_job(job, on_event=None, settings=None, keys=None, client=None):
         for cfg in chain:
             for attempt in (1, 2):
                 try:
-                    if q["type"] in ("single", "judge"):
-                        ans, conf, raw = pv.solve_choice(cfg, keys, stem, q["options"])
+                    if q["type"] in ("single", "judge", "multi"):
+                        if q["type"] == "multi":
+                            # 多选必须出选项字母串：提交器按 answertype=1 发 answer{qid}=字母，
+                            # 旧代码把 multi 丢给文本生成 → 回来一整句话，提交即错（用户实测）。
+                            ans, conf, raw = pv.solve_multi(cfg, keys, stem, q["options"])
+                        else:
+                            ans, conf, raw = pv.solve_choice(cfg, keys, stem, q["options"])
                         if img_cap is not None:
                             conf = min(conf, img_cap)
                         if not ans and _is_refusal(raw):
@@ -155,13 +192,11 @@ def solve_job(job, on_event=None, settings=None, keys=None, client=None):
                         res.update(answer=ans, confidence=conf, source=cfg["name"],
                                    status="ok" if ans else "noviable")
                     else:
-                        # 填空/大题：文本生成（本轮仅占位实现，P3 完善）
-                        prompt = stem + "\n\n请给出答案。"
-                        if img_cap is not None:
-                            prompt = ("按题面解答，答案要能手写成纯文本（矩阵按行空格分列换行分排，"
-                                      "分数写 9/2）。只输出答案本身，共 %s 个空则每行一个。\n\n%s"
-                                      % (q.get("blank_count", 1), prompt))
-                        txt = pv.chat(cfg, keys, [{"role": "user", "content": prompt}], max_tokens=800)
+                        # 填空/多选/简答：文本生成。风格令见 _text_prompt()
+                        # （用户要求：答案简洁、语言平实、去 AI 味、像学生写的）
+                        txt = pv.chat(cfg, keys,
+                                      [{"role": "user", "content": _text_prompt(q)}],
+                                      max_tokens=800)
                         if _is_refusal(txt):
                             # 模型拒答≠答案：标失败换下一家，全链拒答则留空待人工
                             res.update(answer="", status="refused", err="模型称缺题面")

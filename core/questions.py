@@ -29,7 +29,12 @@ def parse_work_page(html):
         tc = re.search(r'id="answertype%s"[^>]*value="(\d+)"' % qid, ch)
         if tc:
             typecode = tc.group(1)
-        qtype = QTYPE.get(typecode, "subjective" if "单选" not in tname and "多选" not in tname else "single")
+        qtype = QTYPE.get(typecode)
+        if qtype is None:
+            # 没抓到 answertype 输入时按题面题型名兜底。旧写法把「多选」也并进 single
+            # （`..."多选" not in tname else "single"`）→ 多选题只出一个字母，答案必错。
+            qtype = ("multi" if "多选" in tname else
+                     "single" if "单选" in tname else "subjective")
         stem_m = re.search(r'<h3[^>]*class="mark_name[^"]*"[^>]*>(.*?)</h3>', ch, re.S)
         stem = ""
         if stem_m:

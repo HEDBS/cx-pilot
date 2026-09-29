@@ -3,7 +3,7 @@
 // server job.results（语义同 app_v2.manual_panel:773），低置信/失败/需人工均可人工兜底。
 import { net } from "./api.js";
 import { store, errText, withBusy } from "./store.js";
-import { deleteJobUI, applySolveEvent } from "./plan.js";   // M3b R4 删卡；重试复用真实 /solve 事件处理
+import { deleteJobUI, applySolveEvent, markSolving } from "./plan.js";   // M3b R4 删卡；重试复用真实 /solve 事件处理
 
 let listEl;
 let allBtn;   // 工具条的「重试失败题」——要跟全局 busy 联动（用户实测反馈）
@@ -179,6 +179,7 @@ async function retryJobs(ids) {
   const names = list.map((k) => store.jobs[k].title).join("、");
   const body = { keys: list, solve: true };
   store.lastSolveBody = body;      // 风控弹窗通过后据此自动续跑
+  markSolving(list);               // 关键：重试已存在的 job 必须重置 state/清旧答案（否则不出加载圈）
   await withBusy("solve", async () => {
     store.addLog(`重试 ${list.length} 份：${names}（重新领卷 + 重解，不提交）`);
     try {

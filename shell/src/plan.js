@@ -101,6 +101,16 @@ export function initPlan(root) {
         { type: "error", msg: msg || "【9010】操作异常，请输入图片中的验证码" }),
       // 阶段取证：投一条真实的逐题 progress 事件（顶端横条 领卷→解题 的切换在分支里）
       progressEvent: (n, total) => applySolveEvent({ type: "progress", n, total }),
+      // 真解题取证钩子：自造题走 solve:true（真调模型，不碰超星、不提交），
+      // 外层 withBusy 与「开始解题」同一条占用路径 → 「正在解题加载圈」能在真数据下验。
+      // 不要用「手动改 state/busy」去验这个——那会掩盖真实情况（已栽过一次）。
+      solveReal: (jobId, q) => withBusy("solve", async () => {
+        await net.sse("/solve", {
+          job_id: jobId, solve: true,
+          questions: [q || { qid: "gs1", type: "single", stem: "1+1 等于几？（探针自造题，真调模型）",
+                             options: { A: "1", B: "2", C: "3", D: "4" }, image_flag: false }],
+        }, applySolveEvent);
+      }),
     };
     document.body.dataset.m2hook = "1";
   }
@@ -141,10 +151,29 @@ export function cancelSolve(jobId) {
   return net.api("/cancel", { method: "POST", body: { mode: "solve", job_id: jobId } });
 }
 
+// 重新解一份作业前，先在前端把目标 job 标成「解题中」：清掉上一轮结果 + 置 running。
+// 为什么必须做：upsertJobEvent 只在 **新建** job 时给 state="running"；点「重试」时
+// job 早就存在（state 停在 done/interrupted）→ ①「正在解题」加载圈永不出现
+// ② 卡片在重新解的过程中一直显示上一轮的旧答案。两处都靠这个函数修正。
+// startSolve / retryJobs / 风控续跑共用；探针断言也走它（避免"只有探针能过"）。
+export function markSolving(ids) {
+  let hit = false;
+  (ids || []).forEach((k) => {
+    const j = store.jobs[k];
+    if (!j) return;                       // 首次解题：job 由 SSE 首个 item 建（自带 running）
+    j.results = {}; j.state = "running"; j.low = [];
+    j.progress = "0/" + (j.questions || []).length;
+    hit = true;
+  });
+  if (hit) store.emit("jobs");
+  return hit;
+}
+
 // 风控验证码通过后自动续跑：用记住的那次 /solve 请求重发（只重解，不提交）。
 async function rerunLastSolve() {
   const body = store.lastSolveBody;
   if (!body) { store.addLog("风控已解除，请再点一次刚才的操作", "ok"); return; }
+  markSolving(body.keys);
   await withBusy("solve", async () => {
     store.addLog(`风控已解除，自动继续：${(body.keys || []).length} 份`);
     await net.sse("/solve", body, applySolveEvent);
@@ -291,6 +320,7 @@ async function startSolve(solveFlag = true) {
   if (!store.busy) go("queue");
   const body = { keys, solve: solveFlag };
   store.lastSolveBody = body;      // 风控弹窗通过后据此自动续跑
+  markSolving(keys);               // 重解同一份时清旧答案 + 置 running（加载圈/旧答案都靠它）
   await withBusy("solve", async () => {
     store.addLog(`开始解题：${keys.length} 份（领卷${solveFlag ? "→逐题" : "（只领卷）"}，SSE）`);
     await net.sse("/solve", body, applySolveEvent);

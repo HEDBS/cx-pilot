@@ -781,23 +781,29 @@ async function j8() {
       return {txt: (t && t.textContent) || ""};})()`);
     check(bag, "收到逐题进度后切成「正在解题 3/10…」（不再笼统说「领卷并逐题」）",
       /正在解题 3\/10/.test(b1.txt), b1, "含「正在解题 3/10」");
+    // 清掉这一段留下的占用：withBusy 见到 busy 就早退，不清会让下面的真解题开不起来
+    await evaluate(`(function(){ window.__m2.store.busy = null; window.__m2.store.emit("busy"); return 1;})()`);
 
-    // (2) 正在解的那道题：左侧加载圈（只一道，且在首行）
-    await evaluate(`window.__m3b.solveFetchOnly("probe:g8")`);
-    await wait(`!!window.__m2.store.jobs["probe:g8"]`, 20000);
+    // (2) 正在解的那道题：左侧加载圈 —— 走【真实数据流】
+    // 真 /solve(solve:true，真调模型，不碰超星)，外层 withBusy 与「开始解题」同一条占用路径。
+    // 刻意不篡改 state/busy：上一版探针自己写了 state="running"+busy，把真实情况掩盖了
+    // （用户实测报"没有加载圈"，探针却绿）。这里只在真流跑起来的过程中抓现场。
+    await evaluate(`(function(){
+      window.__spin = {done: false, err: null};
+      window.__m3b.solveReal("probe:spin").then(function(){ window.__spin.done = true; })
+        .catch(function(e){ window.__spin.err = String(e).slice(0, 90); });
+      return 1;})()`);
+    await wait(`document.querySelectorAll(".job-card .q-spin").length > 0`, 30000);
     const sp = await evaluate(`(function(){
-      var s = window.__m2.store;
-      var j = s.jobs["probe:g8"];
-      j.results = {};                 // 防御：即便被水合也保证是"待解"
-      j.state = "running"; s.busy = "solve"; s.emit("jobs");
-      var card = [].slice.call(document.querySelectorAll(".job-card"))
-                   .filter(function(c){ return c.querySelector(".jt").textContent.indexOf("probe:g8") === 0; })[0];
+      var card = document.querySelector(".job-card");
       var rows = [].slice.call(card.querySelectorAll(".q-row"));
-      return {rows: rows.length,
-              spins: card.querySelectorAll(".q-spin").length,
-              activeIdx: rows.findIndex(function(r){ return r.classList.contains("q-active"); }),
-              spinIdx: rows.findIndex(function(r){ return r.querySelector(".q-spin"); })};})()`);
-    check(bag, "解题中：正在写的那道题行左侧出加载圈（且仅一道、在首行）",
+      var s = window.__m2.store;
+      return {busy: s.busy, state: (s.jobs["probe:spin"] || {}).state,
+              rows: rows.length,
+              spins: document.querySelectorAll(".job-card .q-spin").length,
+              spinIdx: rows.findIndex(function(r){ return r.querySelector(".q-spin"); }),
+              activeIdx: rows.findIndex(function(r){ return r.classList.contains("q-active"); })};})()`);
+    check(bag, "真解题流中：正在写的那道题行左侧出加载圈（且仅一道、在首行）",
       sp.spins === 1 && sp.activeIdx === 0 && sp.spinIdx === 0, sp,
       "1 个圈 / q-active 与圈都在 row[0]");
     const anim = await evaluate(`(function(){
@@ -807,15 +813,52 @@ async function j8() {
       anim >= 1, { animations: anim }, ">=1");
 
     // 结果落定后圈要挪走（不能一直挂着）
+    await wait(`window.__spin.done || window.__spin.err`, 40000);
+    await sleep(400);
     const moved = await evaluate(`(function(){
-      var s = window.__m2.store;
-      var j = s.jobs["probe:g8"];
-      j.results[j.questions[0].qid] = {qid: j.questions[0].qid, status: "ok", answer: "A", source: "probe"};
-      s.emit("jobs");
-      return {spins: document.querySelectorAll(".job-card .q-spin").length};})()`);
-    check(bag, "该题出结果后加载圈消失（不残留）", moved.spins === 0, moved, "0");
+      return {spins: document.querySelectorAll(".job-card .q-spin").length,
+              busy: window.__m2.store.busy, err: window.__spin.err,
+              result: (window.__m2.store.jobs["probe:spin"] || {}).results || {}};})()`);
+    check(bag, "该题出结果后加载圈消失、占用释放（不残留）",
+      moved.spins === 0 && !moved.busy,
+      { 圈数: moved.spins, busy: moved.busy, 模型错误: moved.err ||
+        Object.keys(moved.result).length + " 条结果" }, "0 / 无占用");
+
+    // (2b) 重试【已存在的 job】—— 用户实测报"没有加载圈"的真场景：
+    //      点重试时 job 早就存在（state 停在 done），而 upsertJobEvent 只在【新建】时置
+    //      state="running" → 旧代码 state 永远回不到 running → 圈永不出现，
+    //      且重解过程中卡片还显示上一轮的答案。这里点的是真按钮 → 真 retryJobs。
+    //      markSolving 在第一个 await 之前同步执行，所以点击返回后三者可确定性断言。
+    await evaluate(`(function(){
+      var s = window.__m2.store, j = s.jobs["probe:spin"];
+      // 造样本：全题标失败（复现用户"有失败题所以能点重试"的场景）
+      j.questions.forEach(function(q){
+        j.results[q.qid] = Object.assign({}, j.results[q.qid] || {},
+          {status: "provider_err", answer: "", confidence: 0});
+      });
+      j.state = "done"; s.busy = null; s.emit("jobs");
+      return 1;})()`);
+    const b4 = await evaluate(`(function(){
+      var j = window.__m2.store.jobs["probe:spin"];
+      return {state: j.state, results: Object.keys(j.results).length,
+              btn: !!document.querySelector(".job-card .retry-btn")};})()`);
+    const rt = await evaluate(`(function(){
+      document.querySelector(".job-card .retry-btn").click();     // 真按钮 → 真 retryJobs
+      var s = window.__m2.store, j = s.jobs["probe:spin"];
+      return {state: j.state, results: Object.keys(j.results).length,
+              busy: s.busy, spins: document.querySelectorAll(".job-card .q-spin").length};})()`);
+    check(bag, "点「重试」旧 job：state 回到 running + 旧答案清空（旧代码两项都不做）",
+      b4.state === "done" && b4.results > 0 && rt.state === "running" && rt.results === 0,
+      { 点击前: b4, 点击后: {state: rt.state, results: rt.results} },
+      "done/有旧答案 → running/0 条");
+    check(bag, "点「重试」后该题左侧立刻出加载圈（用户报的「没有圈」）",
+      rt.spins === 1 && rt.busy === "solve",
+      { 圈数: rt.spins, busy: rt.busy }, "1 个圈 / busy=solve");
 
     // (3) 侧栏「后端链」：保存设置后必须刷新（用户报：配了硅基流动但侧栏不显示）
+    // 断言不依赖测试机的真实后端配置（用户随时会启用/禁用）：桩里塞一个必然不存在的
+    // 探针后端名，它一定是"新出现"的，才能稳定验到入场动效。
+    const NEWP = "探针后端ZZZ";
     const before = await evaluate(`[].slice.call(document.querySelectorAll("#backend-list .side-item:not(.keyed-off) .bn")).map(function(x){return x.textContent;})`);
     await evaluate(`(function(){
       window.__origFetch3 = window.fetch;
@@ -824,7 +867,7 @@ async function j8() {
         var isGet = !init || String(init.method || "GET").toUpperCase() === "GET";
         if (s.indexOf("/settings") >= 0 && isGet) {
           return Promise.resolve(new Response(
-            JSON.stringify({active: ["Pollinations(匿名,慢)", "硅基流动"], settings: {}}),
+            JSON.stringify({active: ${JSON.stringify(["OpenRouter", "Pollinations(匿名,慢)", NEWP])}, settings: {}}),
             {status: 200, headers: {"Content-Type": "application/json"}}));
         }
         return window.__origFetch3.apply(this, arguments);
@@ -842,20 +885,21 @@ async function j8() {
       }
       window.__m2.store.emit("settings");
       return 1;})()`);
-    await wait(`[].slice.call(document.querySelectorAll("#backend-list .side-item:not(.keyed-off) .bn")).some(function(x){return x.textContent==="硅基流动";})`, 8000);
+    await wait(`[].slice.call(document.querySelectorAll("#backend-list .side-item:not(.keyed-off) .bn")).some(function(x){return x.textContent===${JSON.stringify(NEWP)};})`, 8000);
     const after = await evaluate(`(function(){
+      var NP = ${JSON.stringify(NEWP)};
       var items = [].slice.call(document.querySelectorAll("#backend-list .side-item:not(.keyed-off)"));
       var neu = items.filter(function(x){
-        var n = x.querySelector(".bn"); return n && n.textContent === "硅基流动"; })[0];
+        var n = x.querySelector(".bn"); return n && n.textContent === NP; })[0];
       return {names: items.map(function(x){
                 var n = x.querySelector(".bn"); return n ? n.textContent : ""; }),
               anims: neu ? neu.getAnimations().length : -1,
               // 动效不看 getAnimations()（读的时刻可能在 450ms 之后）；
               // 记录 animate() 真被调用过 + 时长=450，与时序无关。
               animLog: (window.__animLog || []).filter(function(r){
-                return r.txt.indexOf("硅基流动") >= 0; })};})()`);
+                return r.txt.indexOf(NP) >= 0; })};})()`);
     check(bag, "保存设置后侧栏「后端链」立刻刷新出该 provider（旧 bug：不刷新）",
-      after.names.indexOf("硅基流动") >= 0, { 前: before, 后: after.names }, "含「硅基流动」");
+      after.names.indexOf(NEWP) >= 0, { 前: before, 后: after.names }, "含 " + NEWP);
     check(bag, "新出现的后端条目带入场动效（真的调了 animate()，450ms）",
       after.animLog.length >= 1 && after.animLog[0].dur === 450,
       { 调用记录: after.animLog, 现场动画数: after.anims }, ">=1 次 / duration=450");
