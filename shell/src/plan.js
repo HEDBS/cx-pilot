@@ -7,7 +7,7 @@
 import { net } from "./api.js";
 import { store, courseColor, errText, withBusy, refreshTasks } from "./store.js";
 import { EASE, animateLayout, reduced } from "./flip.js";
-import { confirmDlg } from "./modal.js";
+import { confirmDlg, captchaDlg } from "./modal.js";
 import { go } from "./nav.js";
 
 const COLW = 330, GAP = 16, HDR = 44, CARD_GAP = 10;
@@ -94,6 +94,10 @@ export function initPlan(root) {
       }, applySolveEvent),
       scan: () => runScan(),
       cancelScan, cancelSolve,
+      // 风控取证钩子：投一条真实的 9010 error 事件，走 applySolveEvent 的真实分支
+      // （弹验证码窗的接线在分支里，直接调 captchaDlg 就绕过接线了，测不到真东西）
+      riskEvent: (msg) => applySolveEvent(
+        { type: "error", msg: msg || "【9010】操作异常，请输入图片中的验证码" }),
     };
     document.body.dataset.m2hook = "1";
   }
@@ -134,6 +138,16 @@ export function cancelSolve(jobId) {
   return net.api("/cancel", { method: "POST", body: { mode: "solve", job_id: jobId } });
 }
 
+// 风控验证码通过后自动续跑：用记住的那次 /solve 请求重发（只重解，不提交）。
+async function rerunLastSolve() {
+  const body = store.lastSolveBody;
+  if (!body) { store.addLog("风控已解除，请再点一次刚才的操作", "ok"); return; }
+  await withBusy("solve", async () => {
+    store.addLog(`风控已解除，自动继续：${(body.keys || []).length} 份`);
+    await net.sse("/solve", body, applySolveEvent);
+  });
+}
+
 // /solve SSE 事件处理（startSolve 与探针共用同一条真实代码路径，M2 __m2 先例）
 export function applySolveEvent(ev) {
   if (ev.type === "log") store.addLog(ev.msg);
@@ -149,11 +163,10 @@ export function applySolveEvent(ev) {
       if (n) store.emit("jobs");
       store.addLog("解题已取消（单锁已释放）", "warn");
     } else if (/9010|风控/.test(String(ev.msg))) {
-      // 风控不是掉线：重登/冷却都试过仍失败时才走到这（server 侧已做两级自愈）。
-      // 给用户可操作的两步，而不是甩一句【9010】让他自己猜。
-      store.addLog("!! 被超星风控拦截（要求图片验证码）——自动重登重试后仍未通过", "err");
-      store.addLog("   ① 等 1-2 分钟再点一次（风控跟请求频率走，冷却后通常自动放行）", "err");
-      store.addLog("   ② 若反复出现：用手机学习通 App 正常登录一次，再回来重试", "err");
+      // 风控：server 侧两级自愈已试过仍失败 → 弹窗让用户过验证码（软件内，不用去 App）。
+      // 通过后自动续跑刚才的解题（store.lastSolveBody 由 startSolve / retryJobs 记住）。
+      store.addLog("!! 被超星风控拦截（要求图片验证码）——已弹出验证窗口", "err");
+      captchaDlg(rerunLastSolve);
     } else store.addLog("!! 解题失败：" + String(ev.msg).slice(0, 120), "err");
   }
   else if (ev.type === "item") upsertJobEvent(ev.data);
@@ -196,6 +209,9 @@ export async function runScan() {
         if (ev.msg === "cancelled") {
           scanbar.hidden = true;
           store.addLog("扫描已取消（单锁已释放，可重新扫描）", "warn");
+        } else if (/9010|风控/.test(String(ev.msg))) {
+          store.addLog("!! 扫描被超星风控拦截——已弹出验证窗口", "err");
+          captchaDlg(() => runScan());     // 过完验证码自动重扫（runScan 自带占用检查）
         } else store.addLog("!! 扫描失败：" + String(ev.msg).slice(0, 120), "err");
       }
       else if (ev.type === "done") {
@@ -266,9 +282,11 @@ async function startSolve(solveFlag = true) {
   // 用户实测反馈：点了「开始解题」却停在计划屏，不知道有没有生效。
   // 只在真能开跑时跳屏（占用中交给 withBusy 出提示，别把人空跳过去）。
   if (!store.busy) go("queue");
+  const body = { keys, solve: solveFlag };
+  store.lastSolveBody = body;      // 风控弹窗通过后据此自动续跑
   await withBusy("solve", async () => {
     store.addLog(`开始解题：${keys.length} 份（领卷${solveFlag ? "→逐题" : "（只领卷）"}，SSE）`);
-    await net.sse("/solve", { keys, solve: solveFlag }, applySolveEvent);
+    await net.sse("/solve", body, applySolveEvent);
   });
 }
 

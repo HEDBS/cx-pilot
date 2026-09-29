@@ -277,6 +277,46 @@ class Client:
         """旧名保留（等价 get_json_recovering），领卷路径在用。"""
         return self.get_json_recovering(url, referer=referer)
 
+    # ---------- 风控验证码（【9010】罚站的人工出口）----------
+    # 实测抓到的罚站页结构：
+    #   图 <img id="ccc" onclick="this.src='/processVerifyPng.ac?t=...'">
+    #   表单 <form action="/html/processVerify.ac"> + hidden app=0 + input name=ucode(maxlength=4)
+    # 只做「取图给人看 + 代提交」——自动识别验证码图像属于绕过人机验证，不做。
+    CAPTCHA_IMG = "https://mooc1.chaoxing.com/processVerifyPng.ac?t=%d"
+    CAPTCHA_POST = "https://mooc1.chaoxing.com/html/processVerify.ac"
+
+    def fetch_captcha(self, timeout=20):
+        """取当前会话的验证码图（PNG 字节）。必须用**同一个 Client**——验证码绑在会话上。"""
+        url = self.CAPTCHA_IMG % random.randint(1, 2147483647)
+        h = {"User-Agent": UA, "Referer": "https://mooc1.chaoxing.com/",
+             "Accept": "image/*,*/*;q=0.8"}
+        resp = self.op.open(urllib.request.Request(url, headers=h), timeout=timeout)
+        return resp.read(), (resp.headers.get("Content-Type") or "")
+
+    def submit_captcha(self, code, timeout=25):
+        """提交验证码，并**回验**是否真的解除风控（不靠响应文案猜）。
+
+        回验判据：再打一次课程列表，不再抛 RiskControl 才算通过。
+        """
+        code = re.sub(r"\s+", "", str(code or ""))[:8]
+        if not code:
+            return False
+        data = urllib.parse.urlencode({"app": "0", "ucode": code}).encode()
+        h = {"User-Agent": UA, "Referer": "https://mooc1.chaoxing.com/",
+             "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+             "Origin": "https://mooc1.chaoxing.com"}
+        try:
+            self.op.open(urllib.request.Request(self.CAPTCHA_POST, data=data, headers=h),
+                         timeout=timeout).read()
+        except Exception:
+            return False
+        try:
+            t = self.raw_get("https://mooc1.chaoxing.com/visit/courses",
+                             referer="https://mooc1.chaoxing.com/")
+            return "【9010】" not in t
+        except Exception:      # RiskControl=还没解开；SessionExpired/网络问题=也当没通过
+            return False
+
 
 def strip_html(s):
     s = re.sub(r'<br\s*/?>', '\n', s)

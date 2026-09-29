@@ -9,6 +9,7 @@
   取消绝不改变提交协议、绝不触发任何 POST；submit 真 POST 不可回滚（红线，见 /cancel note）。
 - 日志/错误信息不回显 token/cookie；错误截 200 字。
 """
+import base64
 import hmac
 import io
 import json
@@ -717,5 +718,29 @@ def create_app(token=None):
     def jobs_ep():
         return {"jobs": jobs_view(),
                 "busy": {"mode": STATE.busy_mode} if STATE.busy_mode else None}
+
+    # ---------- 风控验证码（【9010】罚站的人工出口）----------
+    # 只做「取图给人看 + 代提交」：自动识别验证码图 = 绕过人机验证，不做。
+    # 用同一个 Client——验证码绑在会话上，换个实例取到的图提交不认。
+    @app.get("/captcha")
+    def captcha_get():
+        c = STATE.get_client()
+        try:
+            data, ct = c.fetch_captcha()
+        except Exception as e:
+            return {"ok": False, "msg": "取验证码失败：%s" % sanitize(e)[:90]}
+        if data[:4] != b"\x89PNG":
+            return {"ok": False, "msg": "没取到图片验证码（当前会话可能不需要验证码）"}
+        return {"ok": True, "png": base64.b64encode(data).decode("ascii"),
+                "content_type": ct or "image/png"}
+
+    @app.post("/captcha")
+    def captcha_post(body: dict):
+        """提交验证码。成败判据是**回验**（课程列表不再被【9010】拦），不信响应文案。"""
+        c = STATE.get_client()
+        ok = c.submit_captcha(body.get("code"))
+        return {"ok": bool(ok),
+                "msg": "验证码通过，风控已解除" if ok
+                       else "验证码不对或已过期，点「换一张」再试"}
 
     return app

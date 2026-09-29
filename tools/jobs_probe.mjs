@@ -662,6 +662,96 @@ async function j6() {
   });
 }
 
+// ---------- J7：风控验证码弹窗（9010 的人工出口）—— 用户需求新增 ----------
+const TINY_PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==";
+
+async function j7() {
+  await scene("J7 风控验证码：9010 错误→弹窗→图在/可换→提交通过后关闭并续跑", async (bag) => {
+    await goto(srv);
+    // 打桩 /captcha（本地真去超星取图要看运气，且不该让探针依赖外网）：
+    // 只桩这一个路径，其余请求照常走真 server。
+    await evaluate(`(function(){
+      window.__capCalls=[]; var of=window.fetch; window.__origFetch2=of;
+      window.fetch=function(u,init){ try{
+        var s=String(u);
+        if(s.indexOf("/captcha")>=0){
+          var isPost = init && String(init.method||"GET").toUpperCase()==="POST";
+          window.__capCalls.push({post:!!isPost, body:String((init&&init.body)||"")});
+          var payload = isPost ? {ok:true, msg:"验证码通过，风控已解除"}
+                               : {ok:true, png:"${TINY_PNG}", content_type:"image/png"};
+          return Promise.resolve(new Response(JSON.stringify(payload),
+            {status:200, headers:{"Content-Type":"application/json"}}));
+        }
+      }catch(_){}
+        return of.apply(this,arguments); };
+      return 1;})()`);
+
+    // 投一条真实的 9010 事件（走 applySolveEvent 真实分支 → 真接线）
+    await evaluate(`window.__m3b.riskEvent()`);
+    await wait(`!document.getElementById("modal-mask").hidden`, 8000);
+    const d0 = await evaluate(`(function(){var b=document.getElementById("modal-box");
+      var img=b.querySelector("#cap-img");
+      return {title:b.querySelector(".dlg-title").textContent,
+              hint:!!b.querySelector(".dlg-hint"),
+              imgSrc:(img&&img.getAttribute("src"))||"",
+              hasInput:!!b.querySelector("#cap-code"),
+              maxlen:(b.querySelector("#cap-code")||{}).maxLength,
+              hasReload:!!b.querySelector("[data-x=reload]"),
+              calls:window.__capCalls.length};})()`);
+    check(bag, "9010 事件 → 自动弹出验证码窗（真接线，非直接调用）",
+      /风控验证/.test(d0.title) && d0.hasInput && d0.hasReload,
+      { 标题: d0.title, 输入框: d0.hasInput, 换一张: d0.hasReload }, "标题含风控验证 + 输入框 + 换一张");
+    check(bag, "窗口打开即自动取图（data:image/png;base64,…）", 
+      /^data:image\/png;base64,/.test(d0.imgSrc) && d0.calls >= 1,
+      { src前缀: d0.imgSrc.slice(0, 26), 取图次数: d0.calls }, "data:image/png;base64,… / >=1");
+    check(bag, "输入框限 4 位（对齐超星 ucode maxlength=4）", d0.maxlen === 4,
+      { maxLength: d0.maxlen }, "4");
+
+    // 换一张 → 再取一次图
+    await evaluate(`(function(){document.querySelector('#modal-box [data-x=reload]').click(); return 1;})()`);
+    await sleep(500);
+    const c1 = await evaluate(`window.__capCalls.length`);
+    check(bag, "「换一张」会重新取图", c1 > d0.calls, { 取图次数: c1 }, ">1");
+
+    // 空输入不许提交；填对后提交 → 关闭
+    await evaluate(`(function(){document.getElementById("cap-code").value=""; return 1;})()`);
+    await evaluate(`(function(){document.querySelector('#modal-box [data-x=ok]').click(); return 1;})()`);
+    await sleep(400);
+    const empty = await evaluate(`(function(){
+      return {err:document.getElementById("cap-err").textContent,
+              stillOpen:!document.getElementById("modal-mask").hidden,
+              posts:window.__capCalls.filter(function(c){return c.post;}).length};})()`);
+    check(bag, "空输入不提交：就地红字 + 窗口不关",
+      empty.stillOpen && empty.posts === 0 && empty.err.length > 0,
+      empty, "仍打开 / 0 次 POST / 有红字");
+
+    await evaluate(`(function(){document.getElementById("cap-code").value="ab12"; return 1;})()`);
+    await evaluate(`(function(){document.querySelector('#modal-box [data-x=ok]').click(); return 1;})()`);
+    await wait(`document.getElementById("modal-mask").hidden`, 8000);
+    const done = await evaluate(`(function(){
+      var posts=window.__capCalls.filter(function(c){return c.post;});
+      return {closed:document.getElementById("modal-mask").hidden,
+              posts:posts.length, body:String((posts[0]||{}).body||"")};})()`);
+    check(bag, "提交通过后窗口自动关闭，且 body 带 code",
+      done.closed && done.posts === 1 && /ab12/.test(done.body),
+      { 已关闭: done.closed, post次数: done.posts, body: done.body.slice(0, 60) }, "关闭 / 1 次 / 含 ab12");
+
+    await evaluate(`(function(){window.fetch=window.__origFetch2; return 1;})()`);
+    // 收尾：拆掉桩后真打一次服务端端点，确认不是"只有桩能过"
+    const real = await evaluate(`(async function(){
+      try {
+        var q = new URLSearchParams(location.search);
+        var r = await fetch("http://127.0.0.1:" + q.get("cxport") + "/captcha",
+                            { headers: { "X-CX-Token": q.get("cxtoken") } });
+        var d = await r.json();
+        return {status: r.status, ok: !!d.ok, has: !!d.png || !!d.msg};
+      } catch (e) { return {status: -1, ok: false, has: false, err: String(e).slice(0, 60)}; }
+    })()`);
+    check(bag, "真服务端 /captcha 端点可达（非只桩可过）",
+      real.has && real.status === 200, real, "200 + 有 png 或 msg");
+  });
+}
+
 async function main() {
   console.log("[setup] 出证目录 " + OUT);
   srv = await startServer();
@@ -704,7 +794,7 @@ async function main() {
 
   const only = arg("only", "");
   const scenes = [["j1", j1], ["j1b", j1b], ["j2", j2], ["j3", j3],
-                  ["j4", j4], ["j5", j5], ["j6", j6]];
+                  ["j4", j4], ["j5", j5], ["j6", j6], ["j7", j7]];
   for (const [nm, fn] of scenes) {
     if (only && only !== nm) continue;   // --only j6：跳过前面碰超星的场景（J6 本身不碰）
     await fn();

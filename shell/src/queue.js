@@ -163,10 +163,12 @@ async function retryJobs(ids) {
   const list = (ids || []).filter((k) => store.jobs[k]);
   if (!list.length) { store.addLog("没有可重试的题目", "warn"); return; }
   const names = list.map((k) => store.jobs[k].title).join("、");
+  const body = { keys: list, solve: true };
+  store.lastSolveBody = body;      // 风控弹窗通过后据此自动续跑
   await withBusy("solve", async () => {
     store.addLog(`重试 ${list.length} 份：${names}（重新领卷 + 重解，不提交）`);
     try {
-      await net.sse("/solve", { keys: list, solve: true }, applySolveEvent);
+      await net.sse("/solve", body, applySolveEvent);
       store.addLog(`重试结束：${list.length} 份`, "ok");
     } catch (e) {
       store.addLog("!! " + errText("重试", "", e, "看运行日志"), "err");
