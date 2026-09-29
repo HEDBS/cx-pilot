@@ -8,6 +8,19 @@ Windows 桌面小工具：把散落在几十门课程里的学习通作业聚合
 **最新版 v0.4.0** — [下载免安装绿色包](../../releases/latest)（解压即用，**不需要装 Python**）
 · Windows 10/11 · 数据全在本机 `%APPDATA%\cx-pilot\`
 
+## 界面
+
+| 作业计划：聚合 + 三态审核 | 解题队列：正在解的那道题左侧转圈 |
+|---|---|
+| ![作业计划](docs/screenshots/plan.png) | ![解题队列](docs/screenshots/queue.png) |
+
+| 提交审批：逐题过目，确认才交 | 设置：后端链可拖动调序 |
+|---|---|
+| ![提交审批](docs/screenshots/approve.png) | ![设置](docs/screenshots/settings.png) |
+
+> 截图均为**虚构数据**拍摄（通用学科名），不含任何真实账号、课程或密钥。
+> 拍摄脚本：`tools/shots_probe.mjs`（headless 注入假数据出图，可复现）。
+
 ## 它能做什么
 
 - 📋 **作业聚合** — 走学习通官方"学习规划"接口 + 逐课程扫描双通道，临期任务、
