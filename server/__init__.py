@@ -10,5 +10,5 @@ os.environ["CXPilot_GUI"] = "1"
 
 # 版本单一常量：与界面角标 / app_v2 --version 同源（v0.3.1）。app_v2 禁改面里是字符串字面量，
 # server 侧以本常量为唯一事实源；升版三处同步纪律见 HANDOFF §4.7。
-VERSION = "0.3.1"
+VERSION = "0.4.0"
 ENGINE = VERSION

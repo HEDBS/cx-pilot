@@ -16,7 +16,14 @@ Windows 桌面小工具：把散落在几十门课程里的学习通作业聚合
   视觉 API 精读；都不行就在审批界面直接看原图手填——不猜题
 - 🤖 **可插拔后端** — 解题/视觉模型全部是 OpenAI 兼容接口：硅基流动、
   OpenRouter 免费池、Moonshot、智谱、Groq、自建端点……设置里下拉选供应商、
-  粘贴 key 即用，互不影响
+  粘贴 key 即用，互不影响；侧栏实时显示当前**后端链**与优先级（拖动即调序）
+- 👁️ **风控验证码在软件内过（v0.4 新）** — 撞上超星的图片验证码时，软件弹窗把验证码图
+  取回来给你看，输 4 位即可继续刚才的任务，不用切手机 App。**不自动识别验证码**
+  （那属于绕过人机验证）；验证通过与否以回验为准，不信响应文案
+- 📈 **阶段进度清晰（v0.4 新）** — 顶部横条区分「正在领卷…」与「正在解题 3/10…」；
+  解题队列里**正在解答的那道题左侧转圈**，结果落定圈自动挪到下一道
+- ✍️ **答案像学生写的（v0.4 新）** — 简答/填空按「简洁、平实、去 AI 味」约束生成：
+  不出现「首先/其次/综上所述」，不带 markdown 加粗与分点罗列，能手写成纯文本
 - ✅ **人工确认闸门** — 所有答案先进审批屏：逐题预览、修改、跳过，点"提交"前
   必须二次确认。**软件从不静默交卷**
 - 🧊 **格式朴素** — 答案按人工手写风格提交（纯文本、矩阵逐行、分数写 `9/2`），
@@ -26,11 +33,12 @@ Windows 桌面小工具：把散落在几十门课程里的学习通作业聚合
 
 1. 到 [Releases](../../releases) 下载 `cx-pilot-vX.Y.Z.zip`
    > 首次启动：应用会弹出「登录学习通」对话框，输入手机号+密码即可（凭据仅存本机）
-2. **解压到任意目录**（不要只把 exe 拖出来——整个文件夹是运行环境，免安装免 Python）
-   > 注：exe 发行版暂未捆绑本地 OCR（体积原因），图片题自动走视觉 API → 人工两级；
+2. **解压到任意目录**（不要只把 exe 拖出来——`sidecar/` 目录是内置的 Python 运行时，
+   免安装、**不需要你自己装 Python**）
+   > 注：exe 发行版未捆绑本地 OCR（体积原因），图片题自动走视觉 API → 人工两级；
    > 源码模式 `pip install rapidocr-onnxruntime` 即获完整三层链路
-3. 双击 `cx-pilot.exe`，首次启动在设置页配置 API Key（见下）
-4. 数据/配置存于 `%APPDATA%\cxpilot\`，删除即彻底清除；卸载 = 删文件夹
+3. 双击 `cx-pilot.exe`。需要 Windows 10/11 自带的 WebView2（绝大多数机器已预装）
+4. 数据/配置存于 `%APPDATA%\cx-pilot\`，删除即彻底清除；卸载 = 删文件夹
 
 ## 首次配置教程
 
@@ -61,18 +69,44 @@ Windows 桌面小工具：把散落在几十门课程里的学习通作业聚合
 ## 开发
 
 ```bash
-python -m venv .venv && pip install flet==0.28.3 rapidocr-onnxruntime
-python app_v2.py                 # 跑桌面端
-python app_v2.py --selftest      # 渲染自检（无需真账号）
-python tools/smoke_ui.py         # 31 项 UI 冒烟
-python tools/e2e_check.py        # 端到端 8 环（需自己的学习通账号）
+# 引擎侧（纯 Python，无 GUI 依赖）
+pip install -r requirements-server.txt
+python -m server --port 8765        # 起 sidecar（FastAPI，仅绑 127.0.0.1）
+python tools/smoke_ui.py            # 36 项 UI/接口冒烟（离线）
+python tools/solve_probe.py         # 25 项解题层回归（离线，打桩 chat）
+python tools/risk_probe.py          # 10 项会话/风控自愈回归（离线）
+python tools/e2e_http.py            # 端到端 HTTP 语义 8 环
+python tools/e2e_check.py           # 端到端 8 环（需自己的学习通账号）
+
+# 桌面壳（Tauri 2 + 原生 WebView，前端在 shell/src）
+cd shell/src-tauri && cargo run     # dev：自动找 PATH 上的 python 拉起 server
+cd shell && npm run tauri dev       # 同上（走 tauri CLI）
 ```
 
 架构：`core/` 协议引擎（登录/聚合/领卷/识图/解题/提交）与界面完全解耦——
-换任何壳（Web/Tauri）不动引擎。桌面壳当前为 Flet（Flutter for Python）。
-设计文档见 `docs/`（PLAN 阶段路线、DESIGN 界面令牌与交互规约）。
+换任何壳不动引擎。桌面壳为 **Tauri 2**（Rust）+ FastAPI sidecar：壳负责窗口/托盘/
+单实例与 sidecar 生命周期，界面是原生 WebView 里的 `shell/src`（无框架，零构建）。
+sidecar 只绑 `127.0.0.1:<随机端口>`，启动生成随机 token，所有请求带 `X-CX-Token`
+——本机其它进程不该能操作用户的学习通。
 
-打包：`flet pack app_v2.py -n cx-pilot -D`（onedir，产物即 release zip 内容）。
+### 打包发布（维护者）
+
+产物 = **免安装绿色包**：`sidecar/` 里是 PyInstaller 冻结的 Python 运行时，
+所以用户机器不需要装 Python。三步：
+
+```bash
+# 1) 冻结 sidecar（产物 dist/cx-sidecar/）
+python -m PyInstaller --noconfirm --clean sidecar.spec
+
+# 2) 编 release 壳（产物 target/release/shell.exe）
+cd shell/src-tauri && cargo build --release
+
+# 3) 组装 + 打 zip + 泄漏扫描（脚本在 tools/make_release.py）
+python tools/make_release.py --version 0.4.0
+```
+
+发布前必过：`python tools/scan_leak.py`（含 zip 二进制字节层，词表只放指向身份的词）。
+公开仓禁入：`docs/TASK-*.md`、`docs/claude-*.md`、`docs/HANDOFF*`（已 .gitignore）。
 
 ## 边界与免责
 
