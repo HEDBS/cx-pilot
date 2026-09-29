@@ -13,6 +13,17 @@ export function reduced() {
   return matchMedia("(prefers-reduced-motion: reduce)").matches;
 }
 
+// 单个元素的入场动效（新出现的元素）：淡入 + 轻微上移；reduce 降级为纯淡入。
+// §0 纪律：只动 transform/opacity。animateLayout 的新元素分支与侧栏后端条目共用。
+export function animateEnter(el, dur = DUR_MOVE) {
+  const rd = reduced();
+  const a = el.animate(
+    rd ? [{ opacity: 0 }, { opacity: 1 }]
+       : [{ opacity: 0, transform: "translateY(12px)" }, { opacity: 1, transform: "none" }],
+    { duration: rd ? DUR_FADE : dur, easing: rd ? "linear" : EASE });
+  return a;
+}
+
 // 对 container 直接子元素（计划画布：卡片/列头/恢复条）做批量 FLIP。
 // 元素「常驻不重建」（DESIGN 交互规则4）是位移连续的前提——本函数只改 transform/opacity。
 export function animateLayout(container, layoutFn, dur = DUR_MOVE) {
@@ -29,12 +40,8 @@ export function animateLayout(container, layoutFn, dur = DUR_MOVE) {
     const f = firsts.get(el);
     const l = el.getBoundingClientRect();
     if (!f.width && l.width) {
-      // 新出现的元素（扫描逐份入库时卡片陆续冒出）：入场淡入 + 轻微上移。
-      // §0 只动 transform/opacity；reduce 降级为纯淡入。旧行为是直接 pop-in（无动效）。
-      const a = el.animate(
-        rd ? [{ opacity: 0 }, { opacity: 1 }]
-           : [{ opacity: 0, transform: "translateY(12px)" }, { opacity: 1, transform: "none" }],
-        { duration: rd ? DUR_FADE : DUR_MOVE, easing: rd ? "linear" : EASE });
+      // 新出现的元素（扫描逐份入库时卡片陆续冒出）：走统一入场动效，别再 pop-in
+      const a = animateEnter(el);
       el.__cxflip = a;
       a.finished.then(() => { if (el.__cxflip === a) el.__cxflip = null; }).catch(() => {});
       continue;

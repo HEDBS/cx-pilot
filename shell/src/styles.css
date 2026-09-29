@@ -216,6 +216,9 @@ html.aurora-paused #aurora { animation-play-state: paused; }
 /* M3 I3：选中底色移到常驻指示器 #side-pill（transform-only 滑动），
    .active 仅留文字色/字重——不再逐项切背景（瞬变）。底色必须保持透明（nav_probe N1 断言）。 */
 .side-item.active { color: var(--accent); font-weight: 600; }
+/* 「已配 key · 未启用」：灰态可点（点进设置勾启用）。不抢后端链的视觉权重。 */
+.side-item.keyed-off { color: var(--ink3); cursor: pointer; }
+.side-item.keyed-off .conn { font-size: 10.5px; color: var(--warn-fg); flex: none; }
 /* 单个绝对定位指示器：translateY 450ms emphasized（main.js WAAPI）；
    left/right 内缩=宽随 #sidebar 收放自动跟随（与 I2 协同，无需 JS 改尺寸）。 */
 #side-pill { position: absolute; top: 0; left: 10px; right: 10px; height: 37px;
@@ -379,6 +382,12 @@ html.aurora-paused #aurora { animation-play-state: paused; }
 .q-stem { font-size: 12.5px; color: var(--ink); overflow-wrap: anywhere; }
 .q-ans { font-size: 12px; color: var(--ok-fg); max-width: 240px; overflow-wrap: anywhere; }
 .q-row.need-manual { background: color-mix(in srgb, var(--red) 5%, transparent); border-radius: 8px; padding: 9px 8px; }
+/* 正在解答的那道题：左侧加载圈（用户需求）。.q-row 是 flex(align-items:flex-start)，
+   圈作为首列自然贴左；只动旋转，不碰布局属性。 */
+.q-spin { flex: none; width: 12px; height: 12px; margin-top: 4px; border-radius: 50%;
+  border: 2px solid var(--accent); border-top-color: transparent;
+  animation: cx-spin .8s linear infinite; }
+@media (prefers-reduced-motion: reduce) { .q-spin { animation-duration: 3s; } }
 .q-row.low .q-ans { color: var(--warn-fg); }
 .img-flag { font-size: 10.5px; color: var(--accent-ink); background: var(--orange);
   border-radius: 5px; padding: 1px 6px; flex: none; }

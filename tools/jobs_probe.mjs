@@ -752,6 +752,172 @@ async function j7() {
   });
 }
 
+// ---------- J8：本轮用户需求三件 ----------
+// (1) 顶端横条阶段明确（领卷 / 解题 n/N）(2) 正在解的那道题左侧加载圈 (3) 侧栏后端链刷新+动效
+async function j8() {
+  await scene("J8 阶段进度 + 正在解题加载圈 + 侧栏后端链刷新", async (bag) => {
+    await goto(srv);
+    // 自治：清掉上一轮遗留的 job（store.jobs 会从 localStorage 水合回来，
+    // 带着上一轮记过的 results，会让"待解队列"空掉、加载圈断言假红）
+    await evaluate(`(function(){
+      try { localStorage.removeItem("cx.jobs"); } catch (_) { }
+      var s = window.__m2.store;
+      Object.keys(s.jobs).forEach(function(k){ delete s.jobs[k]; });
+      s.busy = null; s.emit("jobs");
+      return 1;})()`);
+
+    // (1) 顶端横条：占用中先说「领卷」，收到逐题进度后切成「解题 n/N」
+    const b0 = await evaluate(`(function(){
+      var s = window.__m2.store; s.busy = "solve"; s.emit("busy");
+      var e = document.getElementById("busy-bar");
+      var t = e.querySelector(".bb-txt");
+      return {shown: !e.hidden, txt: (t && t.textContent) || ""};})()`);
+    check(bag, "顶端横条进入领卷阶段即显示「正在领卷…」",
+      b0.shown && /领卷/.test(b0.txt), b0, "显示 / 文案含「领卷」");
+
+    const b1 = await evaluate(`(function(){
+      window.__m3b.progressEvent(3, 10);
+      var t = document.querySelector("#busy-bar .bb-txt");
+      return {txt: (t && t.textContent) || ""};})()`);
+    check(bag, "收到逐题进度后切成「正在解题 3/10…」（不再笼统说「领卷并逐题」）",
+      /正在解题 3\/10/.test(b1.txt), b1, "含「正在解题 3/10」");
+
+    // (2) 正在解的那道题：左侧加载圈（只一道，且在首行）
+    await evaluate(`window.__m3b.solveFetchOnly("probe:g8")`);
+    await wait(`!!window.__m2.store.jobs["probe:g8"]`, 20000);
+    const sp = await evaluate(`(function(){
+      var s = window.__m2.store;
+      var j = s.jobs["probe:g8"];
+      j.results = {};                 // 防御：即便被水合也保证是"待解"
+      j.state = "running"; s.busy = "solve"; s.emit("jobs");
+      var card = [].slice.call(document.querySelectorAll(".job-card"))
+                   .filter(function(c){ return c.querySelector(".jt").textContent.indexOf("probe:g8") === 0; })[0];
+      var rows = [].slice.call(card.querySelectorAll(".q-row"));
+      return {rows: rows.length,
+              spins: card.querySelectorAll(".q-spin").length,
+              activeIdx: rows.findIndex(function(r){ return r.classList.contains("q-active"); }),
+              spinIdx: rows.findIndex(function(r){ return r.querySelector(".q-spin"); })};})()`);
+    check(bag, "解题中：正在写的那道题行左侧出加载圈（且仅一道、在首行）",
+      sp.spins === 1 && sp.activeIdx === 0 && sp.spinIdx === 0, sp,
+      "1 个圈 / q-active 与圈都在 row[0]");
+    const anim = await evaluate(`(function(){
+      var e = document.querySelector(".q-spin");
+      return e ? e.getAnimations().length : -1;})()`);
+    check(bag, "加载圈真在转（CSS 动画确实在跑，不是静态灰点）",
+      anim >= 1, { animations: anim }, ">=1");
+
+    // 结果落定后圈要挪走（不能一直挂着）
+    const moved = await evaluate(`(function(){
+      var s = window.__m2.store;
+      var j = s.jobs["probe:g8"];
+      j.results[j.questions[0].qid] = {qid: j.questions[0].qid, status: "ok", answer: "A", source: "probe"};
+      s.emit("jobs");
+      return {spins: document.querySelectorAll(".job-card .q-spin").length};})()`);
+    check(bag, "该题出结果后加载圈消失（不残留）", moved.spins === 0, moved, "0");
+
+    // (3) 侧栏「后端链」：保存设置后必须刷新（用户报：配了硅基流动但侧栏不显示）
+    const before = await evaluate(`[].slice.call(document.querySelectorAll("#backend-list .side-item:not(.keyed-off) .bn")).map(function(x){return x.textContent;})`);
+    await evaluate(`(function(){
+      window.__origFetch3 = window.fetch;
+      window.fetch = function(u, init){
+        var s = String(u);
+        var isGet = !init || String(init.method || "GET").toUpperCase() === "GET";
+        if (s.indexOf("/settings") >= 0 && isGet) {
+          return Promise.resolve(new Response(
+            JSON.stringify({active: ["Pollinations(匿名,慢)", "硅基流动"], settings: {}}),
+            {status: 200, headers: {"Content-Type": "application/json"}}));
+        }
+        return window.__origFetch3.apply(this, arguments);
+      };
+      // 记录 animate() 调用（比 getAnimations() 稳，不受读取时刻影响）
+      window.__animLog = [];
+      var oa = Element.prototype.animate;
+      if (!window.__origAnimate3) {
+        window.__origAnimate3 = oa;
+        Element.prototype.animate = function(kf, opt){
+          try { window.__animLog.push({ txt: (this.textContent || "").slice(0, 24),
+                                        dur: opt && opt.duration }); } catch (_) { }
+          return window.__origAnimate3.apply(this, arguments);
+        };
+      }
+      window.__m2.store.emit("settings");
+      return 1;})()`);
+    await wait(`[].slice.call(document.querySelectorAll("#backend-list .side-item:not(.keyed-off) .bn")).some(function(x){return x.textContent==="硅基流动";})`, 8000);
+    const after = await evaluate(`(function(){
+      var items = [].slice.call(document.querySelectorAll("#backend-list .side-item:not(.keyed-off)"));
+      var neu = items.filter(function(x){
+        var n = x.querySelector(".bn"); return n && n.textContent === "硅基流动"; })[0];
+      return {names: items.map(function(x){
+                var n = x.querySelector(".bn"); return n ? n.textContent : ""; }),
+              anims: neu ? neu.getAnimations().length : -1,
+              // 动效不看 getAnimations()（读的时刻可能在 450ms 之后）；
+              // 记录 animate() 真被调用过 + 时长=450，与时序无关。
+              animLog: (window.__animLog || []).filter(function(r){
+                return r.txt.indexOf("硅基流动") >= 0; })};})()`);
+    check(bag, "保存设置后侧栏「后端链」立刻刷新出该 provider（旧 bug：不刷新）",
+      after.names.indexOf("硅基流动") >= 0, { 前: before, 后: after.names }, "含「硅基流动」");
+    check(bag, "新出现的后端条目带入场动效（真的调了 animate()，450ms）",
+      after.animLog.length >= 1 && after.animLog[0].dur === 450,
+      { 调用记录: after.animLog, 现场动画数: after.anims }, ">=1 次 / duration=450");
+    await evaluate(`(function(){ if (window.__origFetch3) window.fetch = window.__origFetch3; return 1;})()`);
+    // 上一段是桩渲染（无 keyed_off），拆桩后必须让侧栏用真实响应重画一次再取证
+    await evaluate(`(function(){ window.__m2.store.emit("settings"); return 1;})()`);
+
+    // (3b) 真数据的 /settings 必须带 keyed_off（如实区分"没配"与"配了没启用"）
+    const ko = await evaluate(`(async function(){
+      var q = new URLSearchParams(location.search);
+      var r = await fetch("http://127.0.0.1:" + q.get("cxport") + "/settings",
+                          { headers: { "X-CX-Token": q.get("cxtoken") } });
+      var d = await r.json();
+      return {isArr: Array.isArray(d.keyed_off), list: d.keyed_off || [], active: d.active || []};})()`);
+    check(bag, "真 /settings 带 keyed_off 字段（区分「没配 key」与「配了没启用」）",
+      ko.isArr, ko, "keyed_off 是数组");
+    if (ko.list.length) {
+      await wait(`document.querySelectorAll("#backend-list .side-item.keyed-off").length > 0`, 8000);
+      const shown = await evaluate(`(function(){
+        var els = [].slice.call(document.querySelectorAll("#backend-list .side-item.keyed-off"));
+        return {n: els.length, names: els.map(function(e){return e.querySelector(".bn").textContent;}),
+                txt: els.length ? els[0].querySelector(".conn").textContent : ""};})()`);
+      check(bag, "侧栏把「配了 key 未启用」的 provider 如实灰态列出（用户报的正是这一条）",
+        shown.n >= 1 && shown.names.indexOf(ko.list[0]) >= 0 && /未启用/.test(shown.txt),
+        {真值: ko.list, 侧栏: shown.names, 角标: shown.txt}, "列出 + 文案含「未启用」");
+    }
+
+    // (3c) 填 key 即视为启用（端到端：真设置界面 → 真 collect → 抓 POST body）
+    const ae = await evaluate(`(async function(){
+      document.querySelector('.side-item[data-scr="settings"]').click();
+      await new Promise(function(r){setTimeout(r, 400);});
+      var rows = [].slice.call(document.querySelectorAll('.set-group[data-grp="providers"] .set-row'));
+      var row = rows.filter(function(x){ return x.querySelector(".nm").textContent === "硅基流动"; })[0];
+      if (!row) return {err: "没找到硅基流动行", n: rows.length};
+      row.querySelector(".en").checked = false;          // 还原用户当时的真实状态
+      row.querySelector(".key").value = "PROBE-FAKE-KEY-0001";
+      var cap = null;
+      var of = window.fetch; window.__of4 = of;
+      window.fetch = function(u, init){
+        if (String(u).indexOf("/settings") >= 0 && init && String(init.method).toUpperCase() === "POST") {
+          cap = JSON.parse(String(init.body));
+          return Promise.resolve(new Response(JSON.stringify({active: [], keyed_off: [], settings: {}, keys: {}}),
+            {status: 200, headers: {"Content-Type": "application/json"}}));
+        }
+        return of.apply(this, arguments);
+      };
+      document.getElementById("set-save").click();
+      await new Promise(function(r){setTimeout(r, 900);});
+      window.fetch = window.__of4;
+      var sil = cap && (cap.settings.providers || []).filter(function(c){return c.name === "硅基流动";})[0];
+      var lg = window.__m2.store.log.map(function(x){return x.msg;})
+                 .filter(function(m){return m.indexOf("已自动启用") >= 0;});
+      return {sent: sil ? {enabled: sil.enabled, hasKey: !!((cap.keys||{}).siliconflow)} : null,
+              autoLog: lg[0] || ""};})()`);
+    check(bag, "在设置里填 key 保存 → 该 provider 自动勾上「启用」并进后端链",
+      ae.sent && ae.sent.enabled === true && ae.sent.hasKey,
+      ae.sent || ae, "POST body 里 enabled=true 且带新 key");
+    check(bag, "自动启用有明确告知（不静默改状态）",
+      /已自动启用/.test(ae.autoLog), { 日志: ae.autoLog.slice(0, 60) }, "含「已自动启用」");
+  });
+}
+
 async function main() {
   console.log("[setup] 出证目录 " + OUT);
   srv = await startServer();
@@ -794,7 +960,7 @@ async function main() {
 
   const only = arg("only", "");
   const scenes = [["j1", j1], ["j1b", j1b], ["j2", j2], ["j3", j3],
-                  ["j4", j4], ["j5", j5], ["j6", j6], ["j7", j7]];
+                  ["j4", j4], ["j5", j5], ["j6", j6], ["j7", j7], ["j8", j8]];
   for (const [nm, fn] of scenes) {
     if (only && only !== nm) continue;   // --only j6：跳过前面碰超星的场景（J6 本身不碰）
     await fn();

@@ -8,7 +8,8 @@ import { initQueue } from "./queue.js";
 import { initApprove } from "./approve.js";
 import { initLogs } from "./logs.js";
 import { initSettings } from "./settings.js";
-import { EASE, DUR_MOVE, DUR_FADE, reduced } from "./flip.js";
+import { EASE, DUR_MOVE, DUR_FADE, reduced, animateEnter } from "./flip.js";
+import { showBusyBar, hideBusyBar } from "./busybar.js";
 import { initTheme } from "./theme.js";
 import { registerNav } from "./nav.js";
 
@@ -143,23 +144,19 @@ registerNav(go);
 // 文案说人话，不暴露 scan/solve 这类内部代号。
 const BUSY_TEXT = {
   audit: "正在验卷（逐条核验作业能否作答）…",
-  solve: "正在领卷并逐题解答…",
+  solve: "正在领卷…",   // 领卷阶段；进入逐题后由 plan.js 刷成「正在解题 n/N…」
   submit: "正在提交到学习通…",
   "submit-dry": "正在预检提交表单…",
   "approve-manual": "正在写回人工答案…",
 };
 function paintBusyBar() {
-  const el = document.getElementById("busy-bar");
-  if (!el) return;
   const m = store.busy;
   const text = m && BUSY_TEXT[m];
   if (!text) {                      // 空闲 / 扫描（有自己的进度 UI）/ 未知代号 → 不显示
-    el.hidden = true;
+    hideBusyBar();
     return;
   }
-  el.innerHTML = `<span class="spin"></span><span class="bb-txt"></span>`;
-  el.querySelector(".bb-txt").textContent = text;
-  el.hidden = false;
+  showBusyBar(text);   // 阶段文案由 busybar.js 管；跑起来的任务可自行刷新成"正在解题 n/N…"
 }
 
 function updateBadges() {
@@ -183,7 +180,13 @@ async function loadSettingsIntoSidebar() {
     const d = await net.api("/settings");
     store.settings = d;
     const box = document.getElementById("backend-list");
+    // 记录上一轮的条目名：只给「本次新启用」的后端加入场动效（首帧整列表不动，别乱闪）。
+    // 必须排除 .keyed-off：否则「配了 key 未启用 → 勾上启用」这个转变会被误判成"本来就有"
+    // 而不播动效——而它恰恰是用户最该看见的一次变化。
+    const prev = new Set(Array.from(
+      box.querySelectorAll(".side-item:not(.keyed-off) .bn")).map((x) => x.textContent));
     box.innerHTML = "";
+    const added = [];
     (d.active || []).forEach((name) => {
       const el = document.createElement("div");
       el.className = "side-item";
@@ -191,10 +194,24 @@ async function loadSettingsIntoSidebar() {
         <span class="bn"></span><span class="conn">已连通(在链)</span>`;
       el.querySelector(".bn").textContent = name;
       box.appendChild(el);
+      if (prev.size && !prev.has(name)) added.push(el);
     });
     if (!d.active || !d.active.length) {
       box.innerHTML = `<div class="side-item" style="color:var(--red)"><span class="lbl">后端链为空——去设置启用 provider</span></div>`;
     }
+    // 「已配 key 但没启用」：如实列出来（灰态 + 点一下去设置），别再让用户以为"配置没生效"
+    (d.keyed_off || []).forEach((name) => {
+      const el = document.createElement("div");
+      el.className = "side-item keyed-off";
+      el.innerHTML = `<span class="ic gray">○</span><span class="bn"></span>
+        <span class="conn">已配 key · 未启用</span>`;
+      el.querySelector(".bn").textContent = name;
+      el.title = "key 已保存，但没勾「启用」→ 不在后端链里。点这里去设置勾上。";
+      el.onclick = () => go("settings");
+      box.appendChild(el);
+      if (prev.size) added.push(el);
+    });
+    added.forEach((el) => animateEnter(el).finished.catch(() => {}));
   } catch (e) { /* 401/428 已由 api 层广播登录框 */ }
 }
 
@@ -248,6 +265,7 @@ async function boot() {
     if (what === "tasks") { updateBadges(); if (inited.has("plan")) layout(); }
     else if (what === "jobs") updateBadges();
     else if (what === "busy") paintBusyBar();
+    else if (what === "settings") loadSettingsIntoSidebar();   // 保存设置后刷新侧栏后端链
   });
   paintBusyBar();
   // M2：resize 重排直接落位（layoutInstant），不补间——连续 resize 事件下 FLIP 会逐帧起新动画，抖

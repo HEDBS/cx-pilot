@@ -103,7 +103,10 @@ function bindDrag(row) {
   });
 }
 
+let autoEnabled = [];   // 本次保存中「填了 key 就自动勾上启用」的 provider（save 后明说，不静默）
+
 function collect() {
+  autoEnabled = [];
   const settings = { providers: [], vision_providers: [],
                      confidence_threshold: Number(form.querySelector("#thr").value) || 0.75 };
   const keys = {};
@@ -118,6 +121,14 @@ function collect() {
       if (newKey) {                       // 只有用户真的输入了新 key 才回传（绝不带 sk-***）
         if (c.key_ref) keys[c.key_ref] = newKey;
         else c.api_key = newKey;
+        // 用户报「配了硅基流动的 api，左侧栏没显示」：key 存进去了，但「启用」没勾 →
+        // 没进后端链 → 侧栏当然不显示。填 key 的意图就是要用它，自动勾上。
+        // 不静默：save() 会明说勾了哪几个，并给"不想用就取消勾选"的回退路径。
+        if (!c.enabled) {
+          c.enabled = true;
+          row.querySelector(".en").checked = true;
+          autoEnabled.push(c.name);
+        }
       }
       settings[grp].push(c);
     }
@@ -132,6 +143,11 @@ async function save() {
     const d = await net.api("/settings", { method: "POST", body });
     store.settings = d;
     store.addLog("设置已保存（key 走原子替换，脱敏值未回写）", "ok");
+    if (autoEnabled.length) {
+      store.addLog(`已自动启用：${autoEnabled.join("、")}（填 key 即视为要用它；` +
+                   `不想用请取消勾选「启用」再保存）`, "warn");
+    }
+    store.emit("settings");    // 让侧栏「后端链」跟着刷新（用户报：配了硅基流动但侧栏不显示）
     paint(d);
   } catch (e) {
     store.addLog("!! " + errText("设置", "保存", e), "err");

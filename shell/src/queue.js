@@ -42,6 +42,10 @@ function render() {
   }
   const thr = (store.settings && store.settings.settings &&
                store.settings.settings.confidence_threshold) || 0.75;
+  // 「正在解答」标记：只给当前真正在跑的那一份出加载圈。
+  // anyBusy 用全局 solveBusy()——重启后残留的幽灵 running 不会误判成"在解"。
+  const anyBusy = solveBusy();
+  let spun = false;
   for (const jid of ids) {
     const j = store.jobs[jid];
     const card = document.createElement("div");
@@ -90,17 +94,27 @@ function render() {
     jn.style.display = j.interruptNote ? "" : "none";
     card.querySelector(".card-del").onclick = () => deleteJobUI(jid);
     const qs = card.querySelector(".qs");
-    j.questions.forEach((q) => qs.appendChild(questionRow(jid, j, q, thr)));
+    // 这份在跑 + 有未出结果的题 → 第一道未出结果的题就是「正在写的那道」，左侧出加载圈。
+    // 结果一到就重新 render，圈自动挪到下一道（无需额外状态）。
+    const pending = j.questions.filter((q) => !j.results[q.qid]);
+    let activeQid = null;
+    if (anyBusy && !spun && j.state === "running" && pending.length) {
+      activeQid = pending[0].qid;
+      spun = true;
+    }
+    j.questions.forEach((q) => qs.appendChild(questionRow(jid, j, q, thr, activeQid)));
     listEl.appendChild(card);
   }
 }
 
-function questionRow(jid, j, q, thr) {
+function questionRow(jid, j, q, thr, activeQid) {
   const r = j.results[q.qid];
   const row = document.createElement("div");
-  row.className = "q-row";
+  const isActive = !!activeQid && q.qid === activeQid;
+  row.className = "q-row" + (isActive ? " q-active" : "");
   const ansTxt = r ? (Array.isArray(r.answer) ? r.answer.join(" / ") : r.answer || r.status) : "";
   row.innerHTML = `
+    ${isActive ? `<span class="q-spin" title="正在解答这道题…"></span>` : ""}
     <div class="q-main">
       <span class="q-type"></span>
       <span class="q-stem"></span>

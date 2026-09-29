@@ -509,9 +509,15 @@ def create_app(token=None):
     def get_settings():
         keys = pv.load_keys()
         act = [c["name"] for c in pv.active_providers(pv.load_settings(), keys)]
+        # 「已配 key 但没启用」的 provider：侧栏要如实说出来。
+        # 用户报「配了硅基流动的 api，左侧栏没显示」——key 存了但 enabled=false，
+        # 不在后端链里，侧栏只列链内成员，看起来就像"配置没生效"。
+        off = [c["name"] for c in pv.load_settings().get("providers", [])
+               if not c.get("enabled")
+               and ((c.get("key_ref") and keys.get(c.get("key_ref"))) or c.get("api_key"))]
         return {"settings": settings_masked(),
                 "keys": {ref: mask_key(v) for ref, v in keys.items()},
-                "active": act}
+                "active": act, "keyed_off": off}
 
     def _atomic_write(path, obj):
         tmp = path + ".tmp"

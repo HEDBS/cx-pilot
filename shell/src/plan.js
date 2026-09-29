@@ -9,6 +9,7 @@ import { store, courseColor, errText, withBusy, refreshTasks } from "./store.js"
 import { EASE, animateLayout, reduced } from "./flip.js";
 import { confirmDlg, captchaDlg } from "./modal.js";
 import { go } from "./nav.js";
+import { showBusyBar } from "./busybar.js";
 
 const COLW = 330, GAP = 16, HDR = 44, CARD_GAP = 10;
 // 取证钩子开关：仅 headless 探针带 ?cxprobe=1 时挂 window.__m2（生产壳 URL 无此参数=零暴露）
@@ -98,6 +99,8 @@ export function initPlan(root) {
       // （弹验证码窗的接线在分支里，直接调 captchaDlg 就绕过接线了，测不到真东西）
       riskEvent: (msg) => applySolveEvent(
         { type: "error", msg: msg || "【9010】操作异常，请输入图片中的验证码" }),
+      // 阶段取证：投一条真实的逐题 progress 事件（顶端横条 领卷→解题 的切换在分支里）
+      progressEvent: (n, total) => applySolveEvent({ type: "progress", n, total }),
     };
     document.body.dataset.m2hook = "1";
   }
@@ -170,7 +173,11 @@ export function applySolveEvent(ev) {
     } else store.addLog("!! 解题失败：" + String(ev.msg).slice(0, 120), "err");
   }
   else if (ev.type === "item") upsertJobEvent(ev.data);
-  else if (ev.type === "progress") { /* 队列屏逐题进度由 item 驱动 */ }
+  else if (ev.type === "progress") {
+    // 顶端横条说清当前阶段（用户实测反馈：分不清在领卷还是在解题）。
+    // 领卷阶段由 main.js 的默认文案「正在领卷…」承担，这里一旦收到逐题进度就切换。
+    if (ev.total) showBusyBar(`正在解题 ${ev.n}/${ev.total}…`);
+  }
   else if (ev.type === "done") {
     (ev.data.jobs || []).forEach((m) => {
       const j = store.jobs[m.job_id];
