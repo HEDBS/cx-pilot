@@ -21,6 +21,8 @@ if os.environ.get("CXPilot_DATADIR"):  # 测试覆盖
 os.makedirs(DATA, exist_ok=True)
 LEGACY_DATA = os.path.join(BASE, "data")
 COOKIE_FILE = os.path.join(DATA, "cookies.txt")
+# 风控自愈时重登前的冷却秒数：风控跟 IP 热度走，刚被打满就立刻重登会被立刻再拦（实测）
+RISK_COOLDOWN_S = 8
 CRED_FILE = os.path.join(DATA, "credentials.json")
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
@@ -32,10 +34,13 @@ class SessionExpired(Exception):
 
 
 class RiskControl(Exception):
-    """超星风控拦截（非掉线）：如【9010】要求图片验证码。
+    """超星风控拦截（非掉线）：如【9010】操作异常，请输入图片中的验证码。
 
-    与 SessionExpired 分开的原因：重登**不能**解决验证码罚站，必须明确告诉用户
-    去手机端/浏览器人过验证码；当成掉线处理会陷入「重登→仍失败」的死循环。
+    处置（2026-09-29 实测）：**弃 cookie 全新登录能洗白**——同一时刻三个接口全被拦，
+    recover_session() 后三个全通。但风控跟 **IP 热度**走：刚跑完几十个请求就立刻重登，
+    新会话会马上再被拦；**冷却数十秒后再重登就干净**。所以处置是「先重载/重登 + 短冷却
+    + 重试」，仍失败才让用户等 1-2 分钟或人工过验证码。与 SessionExpired 分开是因为
+    用户侧话术不同，不是因为重登无效。
     """
 
     pass
@@ -182,15 +187,38 @@ class Client:
         return True
 
     def ensure_login(self):
-        """用 stat2 JSON 接口探活：返回 code==0 才算登录态可用，否则重登。"""
+        """stat2 探活：返回 code==0 才算登录态可用，否则重登。
+
+        2026-09-29 实测踩坑：stat2 自己也会被【9010】罚站。旧写法只 catch
+        (SessionExpired, ApiError)，RiskControl 会**直接从这里冒出来**，导致下游
+        精心加的两级自愈根本没机会跑（用户看到的「解题失败：【9010】」就是这儿漏的）。
+        故改走 get_json_recovering（内部自带 重载→冷却→重登）。
+        """
         try:
-            j = self.get_json("https://stat2-ans.chaoxing.com/stat2/learning/plan/recommended-course-list",
-                              referer="https://stat2-ans.chaoxing.com/stat2-vue/studyPlanAssistant")
+            j = self.get_json_recovering(
+                "https://stat2-ans.chaoxing.com/stat2/learning/plan/recommended-course-list",
+                referer="https://stat2-ans.chaoxing.com/stat2-vue/studyPlanAssistant")
             if j.get("code") == 0:
                 return True
-        except (SessionExpired, ApiError):
+        except (SessionExpired, ApiError, RiskControl):
             pass
         return self.login()
+
+    def reload_cookies(self):
+        """从磁盘重载 cookie（不发任何网络请求，代价≈0）。
+
+        M1 实证：长连接实例被扫描轮换后 mooc-ans 链会中毒，而 cookies.txt 磁盘态始终
+        干净、新实例立刻可用。所以「先重载、再重登」——重登要打登录接口，能省就省
+        （重登本身也会增加被风控的概率）。
+        """
+        self.jar = http.cookiejar.MozillaCookieJar(COOKIE_FILE)
+        if os.path.exists(COOKIE_FILE):
+            try:
+                self.jar.load(ignore_discard=True, ignore_expires=True)
+            except Exception:
+                pass
+        self.op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(self.jar))
+        return True
 
     def recover_session(self):
         """丢弃过期 cookie 后全新登录（真环境实测：mooc1 侧会话过期会招来【9010】
@@ -211,18 +239,33 @@ class Client:
         return self.login()
 
 
-    def get_json_retry_login(self, url, referer=None):
-        """get_json + 掉线自愈：会话过期特征页/登录页 → 重登一次再试。
+    def get_json_recovering(self, url, referer=None):
+        """get_json + 两级会话自愈：①磁盘重载 cookie ②真重登；每级只试一次。
 
-        只在确属登录态失效时触发（raw_get 已把登录页/风控页分开抛），不会对普通
-        业务错误反复重登——重登本身也会增加被风控的概率。
+        覆盖两类会话失效（raw_get 已分开抛）：
+          - SessionExpired：被弹登录页（真掉线）
+          - RiskControl：被超星罚站【9010】（重载/重登常能立刻洗白，实测有效）
+        仍失败则把最后一次异常原样抛出——由上层给用户人话，绝不静默。
         """
+        last = None
         try:
             return self.get_json(url, referer=referer)
-        except SessionExpired:
-            if not self.recover_session():
-                raise
+        except (SessionExpired, RiskControl) as e:
+            last = e
+        self.reload_cookies()
+        try:
             return self.get_json(url, referer=referer)
+        except (SessionExpired, RiskControl) as e:
+            last = e
+        # 重登前的短冷却：风控看 IP 热度，刚被打满就立刻重登会被立刻再拦（实测）
+        time.sleep(RISK_COOLDOWN_S)
+        if self.recover_session():
+            return self.get_json(url, referer=referer)
+        raise last
+
+    def get_json_retry_login(self, url, referer=None):
+        """旧名保留（等价 get_json_recovering），领卷路径在用。"""
+        return self.get_json_recovering(url, referer=referer)
 
 
 def strip_html(s):

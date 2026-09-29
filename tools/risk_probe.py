@@ -138,6 +138,42 @@ def login_page_not_self_blocked():
 check("登录页自身请求不被误判掉线", login_page_not_self_blocked, "no-raise")
 
 
+def recovery_cascade():
+    """两级自愈：①重载 cookie ②真重登；每级一次，且必须真的有重试。"""
+    c3 = Client()
+    calls = {"n": 0, "reload": 0, "relogin": 0}
+
+    # 前两次抛风控，第三次成功 —— 证明「重载后重试」这条路存在
+    def flaky_json(url, referer=None):
+        calls["n"] += 1
+        if calls["n"] <= 2:
+            raise RiskControl("【9010】测试")
+        return {"code": 0, "ok": True}
+
+    c3.get_json = flaky_json
+    c3.reload_cookies = lambda: (calls.__setitem__("reload", calls["reload"] + 1), True)[1]
+    c3.recover_session = lambda: (calls.__setitem__("relogin", calls["relogin"] + 1), True)[1]
+    out = c3.get_json_recovering("https://mooc1.chaoxing.com/x")
+    assert out.get("ok") is True, "自愈未返回结果"
+    assert calls["n"] == 3, "重试次数不对: %s" % calls
+    assert calls["reload"] == 1, "未走磁盘重载: %s" % calls
+
+    # 一路失败时必须抛原异常，而不是静默吞掉
+    c4 = Client()
+    c4.get_json = lambda url, referer=None: (_ for _ in ()).throw(RiskControl("【9010】一直拦"))
+    c4.reload_cookies = lambda: True
+    c4.recover_session = lambda: True
+    try:
+        c4.get_json_recovering("https://mooc1.chaoxing.com/x")
+    except RiskControl:
+        pass
+    else:
+        raise AssertionError("自愈失败后未抛出原异常（静默吞错）")
+
+
+check("两级自愈级联（重载→重登→抛出）", recovery_cascade, "no-raise")
+
+
 def msg_has_code():
     try:
         c.raw_get(base + "/risk")

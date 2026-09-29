@@ -8,7 +8,7 @@ import re
 import time
 from dataclasses import dataclass, asdict
 
-from core.client import Client, BASE, DATA, strip_html, RiskControl
+from core.client import Client, BASE, DATA, strip_html, RiskControl, RISK_COOLDOWN_S
 
 MOOC = "https://mooc1.chaoxing.com"
 
@@ -107,9 +107,15 @@ def refresh_all(client, max_courses=None, delay=(0.6, 1.4), progress=None):
     try:
         trips = _course_triplets(client)
     except RiskControl:
-        if not client.recover_session():
-            raise
-        trips = _course_triplets(client)   # 仍被拦则原样抛出，由上层显式报错
+        # 级联：先磁盘重载（免打登录接口），不行再真重登；仍被拦则抛出
+        client.reload_cookies()
+        try:
+            trips = _course_triplets(client)
+        except RiskControl:
+            time.sleep(RISK_COOLDOWN_S)   # 风控看 IP 热度，重登前先冷却（实测有效）
+            if not client.recover_session():
+                raise
+            trips = _course_triplets(client)   # 仍被拦则原样抛出，由上层显式报错
     if max_courses:
         trips = trips[:max_courses]
     all_w = []
