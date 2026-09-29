@@ -593,6 +593,12 @@ async function j6() {
       fb.btnLoading && fb.btnDisabled && fb.barShown && /领卷/.test(fb.barTxt),
       fb, "loading/disabled/横条可见+含领卷");
 
+    // 用户实测反馈：重试所有题时，「重试失败题」那个键也该进加载态
+    const allB = await evaluate(`(function(){var b=document.getElementById("qu-retry-all");
+      return {loading: b? b.classList.contains("loading"):false, disabled: b? b.disabled:false};})()`);
+    check(bag, "占用期间工具条「重试失败题」也进加载态（灰+圈）",
+      allB.loading && allB.disabled, allB, "loading+disabled");
+
     // 放行桩请求（返回非 SSE 响应 → net.sse 报错 → withBusy 收束）+ 还原 fetch
     await evaluate(`(function(){
       try { if (window.__releaseSolve) window.__releaseSolve(new Response("", {status: 500})); } catch(_){}

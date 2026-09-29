@@ -6,6 +6,18 @@ import { store, errText, withBusy } from "./store.js";
 import { deleteJobUI, applySolveEvent } from "./plan.js";   // M3b R4 删卡；重试复用真实 /solve 事件处理
 
 let listEl;
+let allBtn;   // 工具条的「重试失败题」——要跟全局 busy 联动（用户实测反馈）
+
+// 线程是否被"解题/重试"占着：占用期间所有重试入口都该是灰+转圈，
+// 而不是让人点了才知道"被拒"（用户实测反馈：重试所有题时那个键也该进加载态）。
+const solveBusy = () => store.busy === "solve";
+
+function paintRetryAll() {
+  if (!allBtn) return;
+  const lock = solveBusy();
+  allBtn.disabled = lock;
+  allBtn.classList.toggle("loading", lock);
+}
 
 const TYPE_CN = { single: "单选", multi: "多选", blank: "填空", judge: "判断", subject: "主观" };
 
@@ -60,13 +72,13 @@ function render() {
     card.querySelector(".jt").textContent = `${j.title}（${j.course}）`;
     card.querySelector(".st").textContent = stTxt;
     const rbtn = card.querySelector(".retry-btn");
-    const running = j.state === "running";
+    const lock = j.state === "running" || solveBusy();
     rbtn.textContent = bad > 0 ? `重试 ${bad} 题` : "重试";
-    rbtn.style.display = (running || bad > 0 || j.state === "interrupted") ? "" : "none";
-    // 用户实测反馈：点完不知道有没有生效。运行中=灰掉+转圈（在跑），可点=正常态。
-    rbtn.disabled = running;
-    rbtn.classList.toggle("loading", running);
-    rbtn.title = running ? "这份作业正在解题中…"
+    rbtn.style.display = (j.state === "running" || bad > 0 || j.state === "interrupted") ? "" : "none";
+    // 用户实测反馈：点完不知道有没有生效。占用中=灰掉+转圈，空闲=正常可点。
+    rbtn.disabled = lock;
+    rbtn.classList.toggle("loading", lock);
+    rbtn.title = lock ? "正在解题中，等它跑完再重试…"
       : "重新领卷并重解这份作业（只重解，不提交）";
     rbtn.onclick = () => {
       if (rbtn.disabled) return;
@@ -169,7 +181,7 @@ export function initQueue(rootEl) {
       <div class="spacer"></div><span class="hint">领卷→识图→逐题解；人工兜底不硬答</span></div>
     <div class="stage list-scroll" id="queue-list"></div>`;
   listEl = rootEl.querySelector("#queue-list");
-  const allBtn = rootEl.querySelector("#qu-retry-all");
+  allBtn = rootEl.querySelector("#qu-retry-all");
   allBtn.onclick = () => {
     const ids = Object.keys(store.jobs).filter((k) => {
       const j = store.jobs[k];
@@ -180,10 +192,13 @@ export function initQueue(rootEl) {
     });
     if (!ids.length) { store.addLog("没有需要重试的题目", "ok"); return; }
     allBtn.disabled = true; allBtn.classList.add("loading");   // 点击立刻出圈
-    Promise.resolve(retryJobs(ids)).finally(() => {
-      allBtn.disabled = false; allBtn.classList.remove("loading");
-    });
+    Promise.resolve(retryJobs(ids)).then(paintRetryAll);
   };
   render();
-  store.on((what) => { if (what === "jobs") render(); });
+  paintRetryAll();
+  store.on((what) => {
+    if (what === "jobs") render();
+    // busy 变化要重画：占用时所有重试入口（含本键）转圈+灰，空闲时自动恢复
+    else if (what === "busy") { render(); paintRetryAll(); }
+  });
 }
