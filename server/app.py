@@ -261,6 +261,31 @@ def make_audit_worker(keys, all_flag, force):
     return worker
 
 
+_PROVIDER_HINTS = (
+    ("402", "该后端已不再免费，需要充值"),
+    ("429", "免费额度已用完（通常按天重置）"),
+    ("401", "key 无效或未填写"),
+    ("403", "key 无权访问该模型"),
+    ("10061", "连不上（代理/网络不通）"),
+    ("timeout", "连接超时"),
+)
+
+
+def _why_provider_down(perrs):
+    """把 provider 的原始英文报错翻成人话，供 no_provider 提示用。"""
+    seen = []
+    for r in perrs:
+        s = str(r.get("err") or "")
+        if not s:
+            continue
+        human = next((h for k, h in _PROVIDER_HINTS if k in s), s[:60])
+        src = str(r.get("source") or "")
+        item = ("%s：%s" % (src, human)) if src else human
+        if item not in seen:
+            seen.append(item)
+    return "；".join(seen[:4]) if seen else "后端均无有效 key，或本机网络不通"
+
+
 def make_solve_worker(body):
     """两种入口：keys=[任务key]（真领卷+解题）；或 questions=[自造题]+ref（自检/离线，
     不领卷）。providers=[key_ref…] 限定后端链（对应 e2e「只让 openrouter 在链上」）。
@@ -346,6 +371,15 @@ def make_solve_worker(body):
             for qid in job.results:
                 if qid not in emitted:
                     emit({"type": "item", "data": dict(job.results[qid], job_id=job_id)})
+            # 后端全挂时给可操作指引（用户实测：只看到 Pollinations 402 / OpenRouter 429
+            # 两行天书，不知道该干什么）。判定=本 job 所有题都是 provider_err。
+            perrs = [r for r in job.results.values() if r.get("status") == "provider_err"]
+            if perrs and len(perrs) == len(job.results):
+                why = _why_provider_down(perrs)
+                emit({"type": "error", "msg": (
+                    "no_provider: 所有解题后端都不可用——%s。"
+                    "请到「设置 → 后端」添加并启用一个你自己的后端（自带 key，例如"
+                    "DeepSeek、硅基流动），或等免费额度按天重置后重试。" % why)})
             low_th = settings.get("confidence_threshold", 0.75)
             low = [qid for qid, r in job.results.items()
                    if r["status"] == "ok" and r["confidence"] < low_th]
