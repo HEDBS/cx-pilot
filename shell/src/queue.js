@@ -3,7 +3,7 @@
 // server job.results（语义同 app_v2.manual_panel:773），低置信/失败/需人工均可人工兜底。
 import { net } from "./api.js";
 import { store, errText, withBusy } from "./store.js";
-import { deleteJobUI } from "./plan.js";   // M3b R4：删卡共用实现（确认+先取消）
+import { deleteJobUI, applySolveEvent } from "./plan.js";   // M3b R4 删卡；重试复用真实 /solve 事件处理
 
 let listEl;
 
@@ -40,6 +40,11 @@ function render() {
     const stCls = j.state === "done" ? "ok" : j.state === "running" ? "run"
                 : j.state === "interrupted" ? "grey" : "warn";
     const stTxt = j.state === "interrupted" ? "已中断" : (j.state || "running");
+    // 失败/未解的题数：>0 或已中断 → 露出「重试」（用户实测反馈：失败了没有出路）
+    const bad = j.questions.filter((q) => {
+      const r = j.results[q.qid];
+      return !r || r.status !== "ok";
+    }).length;
     card.innerHTML = `
       <div class="job-h">
         <span class="jt"></span>
@@ -47,12 +52,18 @@ function render() {
         <span class="jnote"></span>
         <span class="spacer"></span>
         <span class="pill ${stCls} st"></span>
+        <button class="btn tiny retry-btn">重试</button>
         <button class="card-del" title="删除此任务卡（运行中会先取消）" aria-label="删除">×</button>
       </div>
       <div class="prog wide"><i style="width:${tot ? 100 * done / tot : 0}%"></i></div>
       <div class="qs"></div>`;
     card.querySelector(".jt").textContent = `${j.title}（${j.course}）`;
     card.querySelector(".st").textContent = stTxt;
+    const rbtn = card.querySelector(".retry-btn");
+    rbtn.textContent = bad > 0 ? `重试 ${bad} 题` : "重试";
+    rbtn.style.display = (bad > 0 || j.state === "interrupted") ? "" : "none";
+    rbtn.title = "重新领卷并重解这份作业（只重解，不提交）";
+    rbtn.onclick = () => retryJobs([jid]);
     const jn = card.querySelector(".jnote");
     jn.textContent = j.interruptNote || "";
     jn.style.display = j.interruptNote ? "" : "none";
@@ -124,12 +135,41 @@ function questionRow(jid, j, q, thr) {
   return row;
 }
 
+// ---------- 重试（用户实测反馈：失败/需人工的题没有出路，只能删卡重来） ----------
+// 复用真实 /solve 流（keys → 重新领卷 → 逐题解）；同一 job_id 原地刷新结果。
+// 风控/掉线的自愈在 server 侧统一处理，这里不重造。只重解，绝不提交。
+async function retryJobs(ids) {
+  const list = (ids || []).filter((k) => store.jobs[k]);
+  if (!list.length) { store.addLog("没有可重试的题目", "warn"); return; }
+  const names = list.map((k) => store.jobs[k].title).join("、");
+  await withBusy("solve", async () => {
+    store.addLog(`重试 ${list.length} 份：${names}（重新领卷 + 重解，不提交）`);
+    try {
+      await net.sse("/solve", { keys: list, solve: true }, applySolveEvent);
+      store.addLog(`重试结束：${list.length} 份`, "ok");
+    } catch (e) {
+      store.addLog("!! " + errText("重试", "", e, "看运行日志"), "err");
+    }
+  });
+}
+
 export function initQueue(rootEl) {
   rootEl.innerHTML = `
     <div class="toolbar"><div class="h1">解题队列</div>
+      <button class="btn tiny" id="qu-retry-all" title="把所有未解出/失败的题重新解一遍（不提交）">重试失败题</button>
       <div class="spacer"></div><span class="hint">领卷→识图→逐题解；人工兜底不硬答</span></div>
     <div class="stage list-scroll" id="queue-list"></div>`;
   listEl = rootEl.querySelector("#queue-list");
+  rootEl.querySelector("#qu-retry-all").onclick = () => {
+    const ids = Object.keys(store.jobs).filter((k) => {
+      const j = store.jobs[k];
+      return j.questions.some((q) => {
+        const r = j.results[q.qid];
+        return !r || r.status !== "ok";
+      });
+    });
+    retryJobs(ids);
+  };
   render();
   store.on((what) => { if (what === "jobs") render(); });
 }

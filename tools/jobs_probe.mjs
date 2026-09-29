@@ -527,6 +527,109 @@ async function j5() {
 }
 
 // ---------- 主流程 ----------
+// ---------- J6：一键全选（审批屏）+ 失败重试（队列屏）—— 用户实测反馈新增 ----------
+async function j6() {
+  await scene("J6 一键全选 + 失败重试：审批屏全选生效；队列屏失败卡露出重试并真发 /solve", async (bag) => {
+    await goto(srv);
+    await evaluate(`window.__m3b.solveFetchOnly("probe:g2")`);
+    await wait(`Object.keys(window.__m2.store.jobs).includes("probe:g2")`, 20000);
+    const seeded = await evaluate(`(function(){
+      var s=window.__m2.store, j=s.jobs["probe:g2"];
+      // 全部题标失败（provider_err）——复现用户"有失败题"的场景
+      j.questions.forEach(function(q){
+        j.results[q.qid]=Object.assign({}, j.results[q.qid]||{}, {status:"provider_err",answer:"",confidence:0});
+      });
+      j.state="done"; j._acceptedInit=false; s.emit("jobs");
+      return {qs:j.questions.length, accepted:j.accepted?j.accepted.size:0};
+    })()`);
+    check(bag, "样本就绪：job 有题且全题失败", seeded.qs > 0,
+      { 题数: seeded.qs }, ">0");
+
+    // —— 队列屏：失败卡露出「重试 N 题」
+    await evaluate(`(function(){document.querySelector('.side-item[data-scr="queue"]').click(); return 1;})()`);
+    await sleep(400);
+    const q0 = await evaluate(`(function(){
+      var c=[].slice.call(document.querySelectorAll(".job-card")).find(function(x){
+        return x.querySelector(".jt").textContent.indexOf("probe:g2")===0;});
+      if(!c) return {found:false};
+      var b=c.querySelector(".retry-btn");
+      return {found:true, hasBtn:!!b, text:b?b.textContent:"", hidden:b?b.style.display==="none":true};
+    })()`);
+    check(bag, "队列屏：失败卡露出「重试」按钮且带失败题数",
+      q0.found && q0.hasBtn && !q0.hidden && new RegExp("重试\\s*" + seeded.qs + "\\s*题").test(q0.text),
+      { 文本: q0.text, 隐藏: q0.hidden }, "重试 " + seeded.qs + " 题 / 可见");
+
+    // —— 点重试必须真发 /solve（spy fetch，随后立刻取消，避免真跑完）
+    const hit = await evaluate(`(function(){
+      window.__solveCalls=[]; var of=window.fetch;
+      window.fetch=function(u,init){ try{ if(String(u).indexOf("/solve")>=0) window.__solveCalls.push((init&&init.body)||"?"); }catch(_){}
+        return of.apply(this,arguments); };
+      var c=[].slice.call(document.querySelectorAll(".job-card")).find(function(x){
+        return x.querySelector(".jt").textContent.indexOf("probe:g2")===0;});
+      c.querySelector(".retry-btn").click(); return 1;})()`);
+    await sleep(1200);
+    const calls = await evaluate(`({n:window.__solveCalls.length, body:String(window.__solveCalls[0]||"")})`);
+    check(bag, "点「重试」真发了 POST /solve（body 带该任务 key）",
+      calls.n >= 1 && /probe:g2/.test(calls.body),
+      { 次数: calls.n, body: calls.body.slice(0, 90) }, ">=1 次 / 含 probe:g2");
+    try { await fetch(`http://127.0.0.1:${srv.port}/cancel`, { method: "POST",
+      headers: { "Content-Type": "application/json", "X-CX-Token": srv.token },
+      body: JSON.stringify({ mode: "solve" }) }); } catch (_) { }
+    await sleep(300);
+
+    // —— 审批屏：全选本份 / 全部全选
+    await evaluate(`(function(){document.querySelector('.side-item[data-scr="approve"]').click(); return 1;})()`);
+    await sleep(400);
+    const a0 = await evaluate(`(function(){
+      var card=[].slice.call(document.querySelectorAll(".ap-card")).find(function(x){
+        return x.querySelector(".jt").textContent.indexOf("probe:g2")===0;});
+      if(!card) return {found:false};
+      return {found:true, hasAll:!!document.getElementById("ap-all"),
+              hasSel:!!card.querySelector(".sel-btn"),
+              selTxt:card.querySelector(".sel-btn").textContent,
+              on:card.querySelectorAll(".chk.on").length, tot:card.querySelectorAll(".chk").length};
+    })()`);
+    check(bag, "审批屏：存在「全选本份」与「全部全选」入口",
+      a0.found && a0.hasAll && a0.hasSel,
+      { 全局: a0.hasAll, 本份: a0.hasSel, 文本: a0.selTxt }, "两者都在");
+    check(bag, "初始未全选（有失败题 → 默认只勾 ok 题）", a0.on < a0.tot,
+      { 已勾: a0.on, 总题: a0.tot }, "已勾<总题");
+
+    // 点「全选本份」→ 全部 .chk 变 on
+    await evaluate(`(function(){
+      var card=[].slice.call(document.querySelectorAll(".ap-card")).find(function(x){
+        return x.querySelector(".jt").textContent.indexOf("probe:g2")===0;});
+      card.querySelector(".sel-btn").click(); return 1;})()`);
+    await sleep(400);
+    const a1 = await evaluate(`(function(){
+      var card=[].slice.call(document.querySelectorAll(".ap-card")).find(function(x){
+        return x.querySelector(".jt").textContent.indexOf("probe:g2")===0;});
+      return {on:card.querySelectorAll(".chk.on").length, tot:card.querySelectorAll(".chk").length,
+              selTxt:card.querySelector(".sel-btn").textContent,
+              count:card.querySelector(".ap-count").textContent,
+              allTxt:document.getElementById("ap-all").textContent};
+    })()`);
+    check(bag, "「全选本份」生效：全部勾上 + 按钮翻转 + 计数同步",
+      a1.on === a1.tot && a1.on > 0 && /全不选/.test(a1.selTxt) && /已勾\s*\d+\s*题/.test(a1.count),
+      { 已勾: a1.on + "/" + a1.tot, 按钮: a1.selTxt, 计数: a1.count, 全局: a1.allTxt },
+      "全勾 / 全不选 / 已勾 N 题");
+
+    // 点「全部全选」（此时已全选 → 应变全不选）
+    await evaluate(`(function(){document.getElementById("ap-all").click(); return 1;})()`);
+    await sleep(400);
+    const a2 = await evaluate(`(function(){
+      var card=[].slice.call(document.querySelectorAll(".ap-card")).find(function(x){
+        return x.querySelector(".jt").textContent.indexOf("probe:g2")===0;});
+      return {on:card.querySelectorAll(".chk.on").length,
+              allTxt:document.getElementById("ap-all").textContent,
+              selTxt:card.querySelector(".sel-btn").textContent};
+    })()`);
+    check(bag, "「全部全选」二次点击=全不选（同键反转，不会越点越乱）",
+      a2.on === 0 && /全部全选/.test(a2.allTxt) && /全选本份/.test(a2.selTxt),
+      { 已勾: a2.on, 全局按钮: a2.allTxt, 本份按钮: a2.selTxt }, "0 / 全部全选 / 全选本份");
+  });
+}
+
 async function main() {
   console.log("[setup] 出证目录 " + OUT);
   srv = await startServer();
@@ -567,12 +670,13 @@ async function main() {
   };
   await send("Page.enable"); await send("Runtime.enable");
 
-  await j1();
-  await j1b();
-  await j2();
-  await j3();
-  await j4();
-  await j5();
+  const only = arg("only", "");
+  const scenes = [["j1", j1], ["j1b", j1b], ["j2", j2], ["j3", j3],
+                  ["j4", j4], ["j5", j5], ["j6", j6]];
+  for (const [nm, fn] of scenes) {
+    if (only && only !== nm) continue;   // --only j6：跳过前面碰超星的场景（J6 本身不碰）
+    await fn();
+  }
 
   const passed = results.filter((r) => r.pass).length;
   console.log("\n============================================================");

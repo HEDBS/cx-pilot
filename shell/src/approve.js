@@ -8,6 +8,7 @@ import { confirmDlg } from "./modal.js";
 import { deleteJobUI } from "./plan.js";   // M3b R4：删卡共用实现（确认+先取消）
 
 let listEl;
+let allBtn;
 
 function threshold() {
   return (store.settings && store.settings.settings &&
@@ -41,6 +42,7 @@ function render() {
       <div class="job-h"><span class="jt"></span><span class="jn ap-count"></span>
         <span class="pill ${j.state === "interrupted" ? "grey" : j.state === "done" ? "ok" : "warn"} ap-st"></span>
         <span class="spacer"></span>
+        <button class="btn tiny sel-btn">全选本份</button>
         <button class="card-del" title="删除此任务卡（运行中会先取消）" aria-label="删除">×</button></div>
       <div class="qs"></div>
       <div class="ap-foot">
@@ -56,6 +58,18 @@ function render() {
     stEl.textContent = j.state === "interrupted" ? "已中断" : (j.state || "");
     stEl.style.display = stEl.textContent ? "" : "none";
     card.querySelector(".card-del").onclick = () => deleteJobUI(jid);
+    // 一键全选：一份作业几十题逐个点太费手（用户实测反馈）。
+    // 同一按钮按当前态反转：全勾 → 全不选；否则 → 全选本份。
+    const selBtn = card.querySelector(".sel-btn");
+    const allOn = () => j.questions.length > 0 &&
+      j.questions.every((q) => j.accepted.has(q.qid));
+    const paintSel = () => { selBtn.textContent = allOn() ? "全不选" : "全选本份"; };
+    selBtn.onclick = () => {
+      j.accepted = new Set(allOn() ? [] : j.questions.map((q) => q.qid));
+      store.persistJobs();
+      render();          // 重建以同步每个 chk 的 .on 态
+    };
+    paintSel();
     const qs = card.querySelector(".qs");
     j.questions.forEach((q) => qs.appendChild(previewRow(jid, j, q, card)));
     const out = card.querySelector(".ap-out");
@@ -105,6 +119,18 @@ function render() {
     listEl.appendChild(card);
   }
   updateCount();
+  paintAll();
+}
+
+// 全局按钮文案跟随当前态（全勾→显示"全部全不选"）
+function paintAll() {
+  if (!allBtn) return;
+  const ids = Object.keys(store.jobs);
+  const every = ids.length > 0 && ids.every((k) => {
+    const j = store.jobs[k];
+    return j.questions.length > 0 && j.questions.every((q) => j.accepted.has(q.qid));
+  });
+  allBtn.textContent = every ? "全部全不选" : "全部全选";
 }
 
 function previewRow(jid, j, q, card) {
@@ -158,10 +184,26 @@ function updateCount() {
 export function initApprove(rootEl) {
   rootEl.innerHTML = `
     <div class="toolbar"><div class="h1">提交审批</div>
+      <button class="btn tiny" id="ap-all" title="对列表里全部作业卡一键全选/全不选">全部全选</button>
       <div class="spacer"></div>
       <span class="hint">双闸门：/approve 勾选 + server confirm 校验；提交模式恒为人工确认</span></div>
     <div class="stage list-scroll" id="ap-list"></div>`;
   listEl = rootEl.querySelector("#ap-list");
+  allBtn = rootEl.querySelector("#ap-all");
+  allBtn.onclick = () => {
+    const ids = Object.keys(store.jobs);
+    if (!ids.length) return;
+    const every = ids.every((k) => {
+      const j = store.jobs[k];
+      return j.questions.length > 0 && j.questions.every((q) => j.accepted.has(q.qid));
+    });
+    ids.forEach((k) => {
+      const j = store.jobs[k];
+      j.accepted = new Set(every ? [] : j.questions.map((q) => q.qid));
+    });
+    store.persistJobs();
+    render();
+  };
   render();
   store.on((what) => { if (what === "jobs" || what === "sel") render(); });
 }
