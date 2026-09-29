@@ -100,8 +100,9 @@ python -m PyInstaller --noconfirm --clean sidecar.spec
 
 # 2) 编 release 壳（产物 target/release/shell.exe）
 #    ⚠ 必须带 --remap-path-prefix：Rust 第三方 crate 的 file!() 会把编译时的
-#    CARGO_HOME 全路径写进 panic 消息，release exe 里就烘进了本机路径
-#    （如 D:/Hermes/Rust/cargo/registry/src/...）。编译期改写掉，别等到发布才发现。
+#    CARGO_HOME 全路径写进 panic 消息，release exe 里就烘进了打包机路径
+#    （形如 <CARGO_HOME>/registry/src/<镜像名>/<crate>/src/*.rs）。编译期改写掉，
+#    别等到发布扫描才发现。
 export RUSTFLAGS="--remap-path-prefix=$CARGO_HOME=/cargo \
 --remap-path-prefix=$CARGO_TARGET_DIR=/target \
 --remap-path-prefix=<你的仓库绝对路径>/shell=/src"
@@ -113,7 +114,7 @@ python tools/make_release.py --version 0.4.0 --shell-exe <release 壳路径>
 # 4) 打 tag 并发 release（把 zip 与构建产物之外的说明一起发）
 git tag -a v0.4.0 -m "v0.4.0" && git push origin v0.4.0
 #    有 gh 就直接 gh release create v0.4.0 <zip> --notes-file <notes>；
-#    没有就用 REST API（POST /repos/HEDBS/cx-pilot/releases + uploads.github.com 传资产）
+#    没有就用 REST API（POST /repos/<owner>/<repo>/releases + uploads.github.com 传资产）
 ```
 
 发布前必过：`python tools/scan_leak.py`（仓库）**与** `python tools/scan_leak.py <组装目录>`
