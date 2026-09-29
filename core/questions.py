@@ -105,10 +105,12 @@ def fetch_work_questions(client: Client, courseid, clazzid, cpi, workid, answeri
                 answerid = ma.group(1)
     referer = "https://mooc1.chaoxing.com/"
     if not standard_enc:
-        ie = client.get_json("https://mooc1.chaoxing.com/mooc-ans/work/isExpire?courseId=%s"
-                             "&classId=%s&cpi=%s&workRelationId=%s&answerId=%s&workId=%s"
-                             % (courseid, clazzid, cpi, workid, answerid, workid),
-                             referer=referer)
+        # 用 get_json_retry_login：会话过期（被弹登录页）时自动重登一次再试，
+        # 而不是把「Expecting value: line 1 column 1」这种解析错误抛给用户。
+        ie = client.get_json_retry_login("https://mooc1.chaoxing.com/mooc-ans/work/isExpire?courseId=%s"
+                                         "&classId=%s&cpi=%s&workRelationId=%s&answerId=%s&workId=%s"
+                                         % (courseid, clazzid, cpi, workid, answerid, workid),
+                                         referer=referer)
         standard_enc = ie.get("data", {}).get("standardEnc", "") if isinstance(ie.get("data"), dict) else ie.get("standardEnc", "")
     # 领卷（直达链已给卷子页时不再走 prompt）
     if page is None:

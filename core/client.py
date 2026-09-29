@@ -82,6 +82,19 @@ class Client:
         req = urllib.request.Request(url, headers=h)
         resp = self.op.open(req, timeout=timeout)
         body = resp.read().decode("utf-8", "replace")
+        # 掉线最典型形态：被弹到 passport2 登录页（真环境实测 2026-09-29：用户点解题只看到
+        # 「Expecting value: line 1 column 1」——因为登录页不是 JSON，旧代码不认，既没自动
+        # 重登也没给人话）。两种判据：最终 URL 落在 passport2，或正文就是那张登录页。
+        final = ""
+        try:
+            final = resp.geturl() or ""
+        except Exception:
+            pass
+        if "passport2.chaoxing.com" in final and "/login" in final:
+            raise SessionExpired("会话过期：被重定向到学习通登录页（%s）" % final[:80])
+        if ("passport2.chaoxing.com/login" in body and
+                ("扫码登录" in body or "用户登录" in body or "手机号登录" in body)):
+            raise SessionExpired("会话过期：返回学习通登录页")
         # 风控/掉线特征页：~820-910B 的「温馨提示/提交失败」
         if len(body) < 1200 and ("温馨提示" in body or "提交失败" in body or "没有此页面访问权限" in body):
             raise SessionExpired("error page: " + re.sub(r"\s+", " ", strip_html(body))[:80])
@@ -193,6 +206,20 @@ class Client:
         self.jar = http.cookiejar.MozillaCookieJar(COOKIE_FILE)
         self.op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(self.jar))
         return self.login()
+
+
+    def get_json_retry_login(self, url, referer=None):
+        """get_json + 掉线自愈：会话过期特征页/登录页 → 重登一次再试。
+
+        只在确属登录态失效时触发（raw_get 已把登录页/风控页分开抛），不会对普通
+        业务错误反复重登——重登本身也会增加被风控的概率。
+        """
+        try:
+            return self.get_json(url, referer=referer)
+        except SessionExpired:
+            if not self.recover_session():
+                raise
+            return self.get_json(url, referer=referer)
 
 
 def strip_html(s):

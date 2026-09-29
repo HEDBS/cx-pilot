@@ -20,8 +20,15 @@ P9010 = """<!DOCTYPE html><html><head><meta charset="utf-8"><title>提示页面<
 <input type="submit" value="提交"/></form></div></body></html>"""
 NORMAL = "<html><body>" + "x" * 3000 + "<a class='courseName' href='/visit/stucoursemiddle?courseid=1'>课</a></body></html>"
 BIGOTHER = "<html><body>" + "y" * 9000 + "</body></html>"
+# 真环境抓到的「被弹登录页」形态（真掉线）
+PLOGIN = """<!DOCTYPE html><html><head><title>用户登录</title></head><body>
+<img src="https://passport2.chaoxing.com/images/fanya/readlogo.png"/>
+<h3>用户登录</h3>
+<a href="https://passport2.chaoxing.com/login?refer=https%3A%2F%2Fmooc1.chaoxing.com%2Fmooc-ans%2Fwork%2FisExpire">扫码登录</a>
+<div>手机号登录</div><div>新用户注册 验证码登录</div>
+</body></html>"""
 
-BODIES = {"/risk": P9010, "/normal": NORMAL, "/big": BIGOTHER}
+BODIES = {"/risk": P9010, "/normal": NORMAL, "/big": BIGOTHER, "/login": PLOGIN}
 
 
 class H(http.server.BaseHTTPRequestHandler):
@@ -63,6 +70,35 @@ print("=== RiskControl 检测 ===")
 check("9010 罚站页", lambda: c.raw_get(base + "/risk"), "RiskControl")
 check("常规页面(不误报)", lambda: c.raw_get(base + "/normal"), "no-raise")
 check("大页面(不误报)", lambda: c.raw_get(base + "/big"), "no-raise")
+check("掉线登录页→SessionExpired", lambda: c.raw_get(base + "/login"), "SessionExpired")
+
+
+def distinct():
+    """风控页与掉线页必须抛不同异常（重登只对掉线有意义）。"""
+    try:
+        c.raw_get(base + "/risk")
+    except RiskControl:
+        pass
+    else:
+        raise AssertionError("风控页未抛 RiskControl")
+    try:
+        c.raw_get(base + "/login")
+    except SessionExpired:
+        pass
+    else:
+        raise AssertionError("登录页未抛 SessionExpired")
+
+
+check("风控/掉线异常类型不混", distinct, "no-raise")
+
+
+def retry_helper_exists():
+    # 掉线自愈入口必须存在（领卷路径靠它自动重登一次）
+    assert callable(getattr(c, "get_json_retry_login", None)), "缺 get_json_retry_login"
+    assert callable(getattr(c, "recover_session", None)), "缺 recover_session"
+
+
+check("自愈入口齐备", retry_helper_exists, "no-raise")
 
 
 def msg_has_code():
