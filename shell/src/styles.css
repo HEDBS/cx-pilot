@@ -472,3 +472,26 @@ html.aurora-paused #aurora { animation-play-state: paused; }
 .dlg .fld { margin-bottom: 10px; }
 .dlg-err { font-size: 12px; color: var(--red); min-height: 18px; margin: 4px 0 8px; }
 .dlg-btns { display: flex; justify-content: flex-end; gap: 10px; margin-top: 8px; }
+
+/* ---------- 顶部进行中横条（任务占线程时的即时反馈；玻璃 chrome，同弹窗配方）----------
+   用户实测反馈：点了按钮只看到日志滚，不知道"现在到底在不在跑"。
+   底色/描边/阴影由 .lg 提供（同 #modal-box 的约定：ID 规则里绝不写 background，
+   否则 specificity 盖掉玻璃——实锤过 :id.class > :class 的坑）。 */
+#busy-bar { position: fixed; top: 12px; left: 50%; transform: translateX(-50%);
+  z-index: 60; display: flex; align-items: center; gap: 9px;
+  padding: 8px 16px; border-radius: 999px;
+  font-size: 12.5px; font-weight: 600; color: var(--ink2);
+  pointer-events: none; white-space: nowrap; }
+#busy-bar .spin { width: 12px; height: 12px; border-radius: 50%; flex: none;
+  border: 2px solid currentColor; border-top-color: transparent;
+  animation: cx-spin .8s linear infinite; opacity: .85; }
+@keyframes cx-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { #busy-bar .spin { animation-duration: 3s; } }
+
+/* 按钮加载圈：点击后立刻可见的"在跑"信号（触发后随 disabled 一并灰掉） */
+.btn.loading { position: relative; padding-right: 27px; }
+.btn.loading::after { content: ""; position: absolute; right: 9px; top: 50%;
+  width: 11px; height: 11px; margin-top: -5.5px; border-radius: 50%;
+  border: 2px solid currentColor; border-top-color: transparent;
+  animation: cx-spin .8s linear infinite; }
+@media (prefers-reduced-motion: reduce) { .btn.loading::after { animation-duration: 3s; } }

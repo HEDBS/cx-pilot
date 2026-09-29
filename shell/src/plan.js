@@ -8,6 +8,7 @@ import { net } from "./api.js";
 import { store, courseColor, errText, withBusy, refreshTasks } from "./store.js";
 import { EASE, animateLayout, reduced } from "./flip.js";
 import { confirmDlg } from "./modal.js";
+import { go } from "./nav.js";
 
 const COLW = 330, GAP = 16, HDR = 44, CARD_GAP = 10;
 // 取证钩子开关：仅 headless 探针带 ?cxprobe=1 时挂 window.__m2（生产壳 URL 无此参数=零暴露）
@@ -177,6 +178,11 @@ export async function runScan() {
         store.scanTotal = ev.total;
         scanfill.style.width = (100 * ev.n / (ev.total || 1)).toFixed(1) + "%";
         scantext.textContent = `扫描 ${ev.n}/${ev.total}`;
+      } else if (ev.type === "tasks") {
+        // 逐份入库：每到一批就把新卡片冒出来（新卡入场动效由 flip.js animateLayout 负责），
+        // 不用等整轮 36 门扫完（用户实测反馈）。
+        await refreshTasks();
+        layout();
       } else if (ev.type === "log") store.addLog(ev.msg);
       else if (ev.type === "error") {
         // M3b R2：server 端 /cancel 生效→本 open 流收到 cancelled，随后哨兵收流；
@@ -251,6 +257,9 @@ async function runAudit(body) {
 async function startSolve(solveFlag = true) {
   const keys = [...store.selected];
   if (!keys.length) { store.addLog("⚠ 未勾选任何任务，先在作业计划勾选", "warn"); return; }
+  // 用户实测反馈：点了「开始解题」却停在计划屏，不知道有没有生效。
+  // 只在真能开跑时跳屏（占用中交给 withBusy 出提示，别把人空跳过去）。
+  if (!store.busy) go("queue");
   await withBusy("solve", async () => {
     store.addLog(`开始解题：${keys.length} 份（领卷${solveFlag ? "→逐题" : "（只领卷）"}，SSE）`);
     await net.sse("/solve", { keys, solve: solveFlag }, applySolveEvent);

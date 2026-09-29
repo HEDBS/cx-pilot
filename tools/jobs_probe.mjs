@@ -559,23 +559,49 @@ async function j6() {
       q0.found && q0.hasBtn && !q0.hidden && new RegExp("重试\\s*" + seeded.qs + "\\s*题").test(q0.text),
       { 文本: q0.text, 隐藏: q0.hidden }, "重试 " + seeded.qs + " 题 / 可见");
 
-    // —— 点重试必须真发 /solve（spy fetch，随后立刻取消，避免真跑完）
-    const hit = await evaluate(`(function(){
-      window.__solveCalls=[]; var of=window.fetch;
-      window.fetch=function(u,init){ try{ if(String(u).indexOf("/solve")>=0) window.__solveCalls.push((init&&init.body)||"?"); }catch(_){}
+    // —— 点重试：真发 /solve + 点击后即时反馈。
+    // 用「不会立刻 resolve 的 fetch 桩」把任务钉在"进行中"——本地假任务瞬间收束，
+    // 横条会在断言前就正确隐藏（第一版探针就栽在这，断言晚于真实收束）。
+    await evaluate(`(function(){
+      window.__solveCalls=[]; window.__releaseSolve=null;
+      var of=window.fetch; window.__origFetch=of;
+      window.fetch=function(u,init){ try{
+        if(String(u).indexOf("/solve")>=0){ window.__solveCalls.push((init&&init.body)||"?");
+          return new Promise(function(res){ window.__releaseSolve=res; }); }
+      }catch(_){}
         return of.apply(this,arguments); };
       var c=[].slice.call(document.querySelectorAll(".job-card")).find(function(x){
         return x.querySelector(".jt").textContent.indexOf("probe:g2")===0;});
       c.querySelector(".retry-btn").click(); return 1;})()`);
-    await sleep(1200);
+    await sleep(400);
     const calls = await evaluate(`({n:window.__solveCalls.length, body:String(window.__solveCalls[0]||"")})`);
     check(bag, "点「重试」真发了 POST /solve（body 带该任务 key）",
       calls.n >= 1 && /probe:g2/.test(calls.body),
       { 次数: calls.n, body: calls.body.slice(0, 90) }, ">=1 次 / 含 probe:g2");
-    try { await fetch(`http://127.0.0.1:${srv.port}/cancel`, { method: "POST",
-      headers: { "Content-Type": "application/json", "X-CX-Token": srv.token },
-      body: JSON.stringify({ mode: "solve" }) }); } catch (_) { }
-    await sleep(300);
+
+    // —— 点击后的即时反馈：按钮转圈 + 顶部横条（用户实测反馈要求）
+    const fb = await evaluate(`(function(){
+      var bb=document.getElementById("busy-bar");
+      var c=[].slice.call(document.querySelectorAll(".job-card")).find(function(x){
+        return x.querySelector(".jt").textContent.indexOf("probe:g2")===0;});
+      var b=c?c.querySelector(".retry-btn"):null;
+      return {barShown: bb? !bb.hidden : false, barTxt: bb? bb.textContent : "",
+              btnLoading: b? b.classList.contains("loading") : false,
+              btnDisabled: b? b.disabled : false};
+    })()`);
+    check(bag, "点击后有即时反馈：重试按钮转圈+禁用，顶部横条显示「正在领卷…」",
+      fb.btnLoading && fb.btnDisabled && fb.barShown && /领卷/.test(fb.barTxt),
+      fb, "loading/disabled/横条可见+含领卷");
+
+    // 放行桩请求（返回非 SSE 响应 → net.sse 报错 → withBusy 收束）+ 还原 fetch
+    await evaluate(`(function(){
+      try { if (window.__releaseSolve) window.__releaseSolve(new Response("", {status: 500})); } catch(_){}
+      window.fetch = window.__origFetch; return 1;})()`);
+    await sleep(900);
+    const after = await evaluate(`(function(){var bb=document.getElementById("busy-bar");
+      return {hidden: bb? bb.hidden : true, busy: !!(window.__m2.store.busy)};})()`);
+    check(bag, "任务收束后横条自动收起（不留残影）",
+      after.busy === false && after.hidden === true, after, "idle + 横条隐藏");
 
     // —— 审批屏：全选本份 / 全部全选
     await evaluate(`(function(){document.querySelector('.side-item[data-scr="approve"]').click(); return 1;})()`);

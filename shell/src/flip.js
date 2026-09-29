@@ -28,7 +28,18 @@ export function animateLayout(container, layoutFn, dur = DUR_MOVE) {
   for (const el of els) {
     const f = firsts.get(el);
     const l = el.getBoundingClientRect();
-    if (!f.width || !l.width) continue;           // 出现/消失（display 翻转）不做位移动画
+    if (!f.width && l.width) {
+      // 新出现的元素（扫描逐份入库时卡片陆续冒出）：入场淡入 + 轻微上移。
+      // §0 只动 transform/opacity；reduce 降级为纯淡入。旧行为是直接 pop-in（无动效）。
+      const a = el.animate(
+        rd ? [{ opacity: 0 }, { opacity: 1 }]
+           : [{ opacity: 0, transform: "translateY(12px)" }, { opacity: 1, transform: "none" }],
+        { duration: rd ? DUR_FADE : DUR_MOVE, easing: rd ? "linear" : EASE });
+      el.__cxflip = a;
+      a.finished.then(() => { if (el.__cxflip === a) el.__cxflip = null; }).catch(() => {});
+      continue;
+    }
+    if (!f.width || !l.width) continue;           // 消失（display 翻转）不做位移动画
     const dx = f.left - l.left, dy = f.top - l.top;
     if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) continue;
     let a;

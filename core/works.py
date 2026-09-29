@@ -98,8 +98,13 @@ def _works_of_course(client, cid, cls, cpi, name):
     return works
 
 
-def refresh_all(client, max_courses=None, delay=(0.6, 1.4), progress=None):
+def refresh_all(client, max_courses=None, delay=(0.6, 1.4), progress=None, on_rows=None):
     """全量遍历。每课 2 个请求(门户+列表)。progress(i,n) 可选回调。
+
+    on_rows(works_of_one_course) 可选：每课解析完立即回调一次，供上层增量入库
+    （用户实测反馈：整轮扫完才一次性冒出全部卡片，等着难受）。
+    与 progress 同纪律：回调异常不得影响扫描，但 CancelledError 属 BaseException，
+    会穿透这里的 except Exception —— 这正是 /cancel 真取消的机制，必须保持。
 
     风控自愈（真环境实测 2026-09-29）：课程列表页被超星罚站时先丢弃过期 cookie 全新
     登录再试一次；仍被拦就**抛出** RiskControl——绝不静默返回 0 条（用户会误判「没作业」）。
@@ -130,6 +135,11 @@ def refresh_all(client, max_courses=None, delay=(0.6, 1.4), progress=None):
             ws = _works_of_course(client, cid, cls, cpi, name)
             all_w.extend(ws)
             print("[%d/%d] %s -> %d 条" % (i + 1, len(trips), name[:18], len(ws)))
+            if on_rows:
+                try:
+                    on_rows(ws)
+                except Exception:
+                    pass
         except RiskControl:
             # 单课中途被罚站：只做**免费**的磁盘重载再试一次。
             # 不要在这里逐课重登——那会连发几十次登录请求被超星限流，
@@ -141,6 +151,11 @@ def refresh_all(client, max_courses=None, delay=(0.6, 1.4), progress=None):
                 all_w.extend(ws)
                 print("[%d/%d] %s -> %d 条（重载 cookie 后重试）"
                       % (i + 1, len(trips), name[:18], len(ws)))
+                if on_rows:          # 重试成功的课也要走增量回调，否则它的卡片得等收尾才冒出来
+                    try:
+                        on_rows(ws)
+                    except Exception:
+                        pass
             except RiskControl as e2:
                 risk_skipped.append(name)
                 print("[%d/%d] %s 风控跳过：%s" % (i + 1, len(trips), name[:18], str(e2)[:50]))

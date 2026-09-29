@@ -196,10 +196,23 @@ def scan_worker(emit):
         n1 = merge_tasks(near)
         emit({"type": "log", "msg": "临期任务 %d 条（官方缓存 %s），新增 %d" %
              (len(near), snap.get("generated", ""), n1)})
+        # 逐课增量入库：每解析完一门课就把新增卡片推给前端（用户实测：等整轮 36 门扫完
+        # 才一次性冒出全部卡片，干等难受）。merge_tasks 幂等，重复合并不会多算。
+        added = {"n": 0}
+
+        def _on_rows(one):
+            one_rows = norm_works_rows(one)
+            if not one_rows:
+                return
+            a = merge_tasks(one_rows)
+            added["n"] += a
+            if a:
+                emit({"type": "tasks", "data": {"added": a, "tasks": len(STATE.tasks)}})
+
         ws = core_works.refresh_all(c, progress=lambda i, n: emit(
-            {"type": "progress", "n": i, "total": n}), delay=_SCAN_DELAY)
+            {"type": "progress", "n": i, "total": n}), on_rows=_on_rows, delay=_SCAN_DELAY)
         rows = norm_works_rows(ws)
-        n2 = merge_tasks(rows)
+        n2 = merge_tasks(rows) + added["n"]   # 收尾兜底 + 增量已入库的总数
         if not ws and (near or STATE.tasks):
             # 兜底：探测漏网时也不许静默说「0 条」——用户会误以为真没作业
             emit({"type": "log", "msg": "⚠ 作业列表为 0 条，但账号有任务记录：可能被风控"

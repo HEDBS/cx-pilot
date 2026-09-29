@@ -10,6 +10,7 @@ import { initLogs } from "./logs.js";
 import { initSettings } from "./settings.js";
 import { EASE, DUR_MOVE, DUR_FADE, reduced } from "./flip.js";
 import { initTheme } from "./theme.js";
+import { registerNav } from "./nav.js";
 
 // ---------- M4 T1：屏级容器上下滑动（TASK-M4 §T1）----------
 // 只动 .scr 容器本体（transform/opacity，WAAPI），不进卡片层、不触发布局属性——
@@ -134,6 +135,33 @@ function go(id) {
   history.replaceState(null, "", "#" + id);
 }
 
+// 把真实路由注册给 nav.js，供 plan/queue 等模块 go(screen) 使用
+registerNav(go);
+
+// ---------- 顶部进行中横条（任务占线程时的即时反馈；用户实测反馈新增）----------
+// 只在"占线程且没有自己进度 UI"的任务上出现：扫描自带进度条与按钮文案，不重复提示。
+// 文案说人话，不暴露 scan/solve 这类内部代号。
+const BUSY_TEXT = {
+  audit: "正在验卷（逐条核验作业能否作答）…",
+  solve: "正在领卷并逐题解答…",
+  submit: "正在提交到学习通…",
+  "submit-dry": "正在预检提交表单…",
+  "approve-manual": "正在写回人工答案…",
+};
+function paintBusyBar() {
+  const el = document.getElementById("busy-bar");
+  if (!el) return;
+  const m = store.busy;
+  const text = m && BUSY_TEXT[m];
+  if (!text) {                      // 空闲 / 扫描（有自己的进度 UI）/ 未知代号 → 不显示
+    el.hidden = true;
+    return;
+  }
+  el.innerHTML = `<span class="spin"></span><span class="bb-txt"></span>`;
+  el.querySelector(".bb-txt").textContent = text;
+  el.hidden = false;
+}
+
 function updateBadges() {
   const n = store.tasks.length;
   document.querySelector('[data-scr="plan"] .side-badge').textContent = n;
@@ -219,7 +247,9 @@ async function boot() {
   store.on((what) => {
     if (what === "tasks") { updateBadges(); if (inited.has("plan")) layout(); }
     else if (what === "jobs") updateBadges();
+    else if (what === "busy") paintBusyBar();
   });
+  paintBusyBar();
   // M2：resize 重排直接落位（layoutInstant），不补间——连续 resize 事件下 FLIP 会逐帧起新动画，抖
   // M3 I3：指示器同步重定位（文字换行可能改行高→offsetTop 变），同样瞬置
   window.addEventListener("resize", () => { if (cur === "plan") layoutInstant(); placePill(false); });

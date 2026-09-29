@@ -60,10 +60,19 @@ function render() {
     card.querySelector(".jt").textContent = `${j.title}（${j.course}）`;
     card.querySelector(".st").textContent = stTxt;
     const rbtn = card.querySelector(".retry-btn");
+    const running = j.state === "running";
     rbtn.textContent = bad > 0 ? `重试 ${bad} 题` : "重试";
-    rbtn.style.display = (bad > 0 || j.state === "interrupted") ? "" : "none";
-    rbtn.title = "重新领卷并重解这份作业（只重解，不提交）";
-    rbtn.onclick = () => retryJobs([jid]);
+    rbtn.style.display = (running || bad > 0 || j.state === "interrupted") ? "" : "none";
+    // 用户实测反馈：点完不知道有没有生效。运行中=灰掉+转圈（在跑），可点=正常态。
+    rbtn.disabled = running;
+    rbtn.classList.toggle("loading", running);
+    rbtn.title = running ? "这份作业正在解题中…"
+      : "重新领卷并重解这份作业（只重解，不提交）";
+    rbtn.onclick = () => {
+      if (rbtn.disabled) return;
+      rbtn.disabled = true; rbtn.classList.add("loading");   // 点击立刻出圈，不等 SSE 回来
+      retryJobs([jid]);
+    };
     const jn = card.querySelector(".jnote");
     jn.textContent = j.interruptNote || "";
     jn.style.display = j.interruptNote ? "" : "none";
@@ -160,7 +169,8 @@ export function initQueue(rootEl) {
       <div class="spacer"></div><span class="hint">领卷→识图→逐题解；人工兜底不硬答</span></div>
     <div class="stage list-scroll" id="queue-list"></div>`;
   listEl = rootEl.querySelector("#queue-list");
-  rootEl.querySelector("#qu-retry-all").onclick = () => {
+  const allBtn = rootEl.querySelector("#qu-retry-all");
+  allBtn.onclick = () => {
     const ids = Object.keys(store.jobs).filter((k) => {
       const j = store.jobs[k];
       return j.questions.some((q) => {
@@ -168,7 +178,11 @@ export function initQueue(rootEl) {
         return !r || r.status !== "ok";
       });
     });
-    retryJobs(ids);
+    if (!ids.length) { store.addLog("没有需要重试的题目", "ok"); return; }
+    allBtn.disabled = true; allBtn.classList.add("loading");   // 点击立刻出圈
+    Promise.resolve(retryJobs(ids)).finally(() => {
+      allBtn.disabled = false; allBtn.classList.remove("loading");
+    });
   };
   render();
   store.on((what) => { if (what === "jobs") render(); });
