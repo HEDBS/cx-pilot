@@ -174,6 +174,51 @@ def recovery_cascade():
 check("两级自愈级联（重载→重登→抛出）", recovery_cascade, "no-raise")
 
 
+def lingjuan_path_is_wrapped():
+    """锁死「领卷路径不许有裸请求」——同一类 bug 已经栽过两次：
+    先是 isExpire（get_json），后是首跳 getWorkStuUrl（raw_get）。两者都会让
+    风控异常绕过自愈壳直接冒到用户面前（日志特征：2 秒内就失败，冷却都没跑到）。"""
+    from core import questions  # noqa: E402
+
+    PAGE = """<html><body>
+    <div class="padBom50 questionLi" id="question101" typeName="单选题">
+      <h3 class="mark_name">1. <span class="colorShallow">(单选题)</span>1+1=?</h3>
+      <input type="hidden" id="answertype101" name="answertype101" value="0"/>
+      <input type="hidden" id="answer101" name="answer101" value=""/>
+      <span data="A" class="choice101 num_option fl">A</span>
+      <div class="fl answer_p"><p>1</p></div>
+    </div>
+    <form action="/mooc-ans/work/addStudentWorkNewWeb?x=1">
+      <input type="hidden" name="enc" value="e"/>
+    </form></body></html>"""
+
+    class FakeClient:
+        def __init__(self):
+            self.bare = []
+
+        def raw_get(self, url, **kw):          # 裸请求：命中即说明路径没套自愈壳
+            self.bare.append(url)
+            raise RiskControl("【9010】测试")
+
+        def raw_get_recovering(self, url, **kw):
+            return PAGE
+
+        def get_json_retry_login(self, url, **kw):
+            return {"standardEnc": "x"}
+
+        def get_json(self, url, **kw):
+            self.bare.append(url)
+            raise RiskControl("【9010】测试")
+
+    fc = FakeClient()
+    qs, ctx = questions.fetch_work_questions(fc, "1", "2", "3", "4")
+    assert len(qs) == 1, "领卷没解析出题: %s" % qs
+    assert not fc.bare, "领卷路径还有裸请求漏网（绕过自愈壳）: %s" % fc.bare
+
+
+check("领卷路径无裸请求（全部走自愈壳）", lingjuan_path_is_wrapped, "no-raise")
+
+
 def msg_has_code():
     try:
         c.raw_get(base + "/risk")

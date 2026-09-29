@@ -148,6 +148,12 @@ export function applySolveEvent(ev) {
       }
       if (n) store.emit("jobs");
       store.addLog("解题已取消（单锁已释放）", "warn");
+    } else if (/9010|风控/.test(String(ev.msg))) {
+      // 风控不是掉线：重登/冷却都试过仍失败时才走到这（server 侧已做两级自愈）。
+      // 给用户可操作的两步，而不是甩一句【9010】让他自己猜。
+      store.addLog("!! 被超星风控拦截（要求图片验证码）——自动重登重试后仍未通过", "err");
+      store.addLog("   ① 等 1-2 分钟再点一次（风控跟请求频率走，冷却后通常自动放行）", "err");
+      store.addLog("   ② 若反复出现：用手机学习通 App 正常登录一次，再回来重试", "err");
     } else store.addLog("!! 解题失败：" + String(ev.msg).slice(0, 120), "err");
   }
   else if (ev.type === "item") upsertJobEvent(ev.data);

@@ -88,7 +88,9 @@ def fetch_work_questions(client: Client, courseid, clazzid, cpi, workid, answeri
         gurl = ("https://stat2-ans.chaoxing.com/stat2/learning/plan/"
                 "getWorkStuUrl?courseid=%s&clazzid=%s&cpi=%s&workId=%s"
                 % (courseid, clazzid, cpi, workid))
-        body = client.raw_get(gurl)
+        # raw_get_recovering：这一跳也会被【9010】打中（真环境实测：日志"2 秒就失败"，
+        # 因为裸 raw_get 没有自愈壳，异常直接冒到用户面前、冷却都没跑到）。
+        body = client.raw_get_recovering(gurl)
         if body[:1] in "@{":
             try:
                 j = json.loads(body.lstrip("@"))
@@ -116,7 +118,7 @@ def fetch_work_questions(client: Client, courseid, clazzid, cpi, workid, answeri
     if page is None:
         prompt_url = ("https://mooc1.chaoxing.com/mooc-ans/mooc2/work/prompt?courseId=%s&classId=%s"
                       "&cpi=%s&workId=%s&answerId=%s&enc=%s" % (courseid, clazzid, cpi, workid, answerid, enc))
-        page = client.raw_get(prompt_url, referer=referer)
+        page = client.raw_get_recovering(prompt_url, referer=referer)
     qs = parse_work_page(page)
     # 提交上下文：form action 里的 token / totalQuestionNum + hidden 群
     fa = re.search(r'action="(/mooc-ans/work/addStudentWorkNewWeb\?[^"]+)"', page)

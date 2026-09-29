@@ -239,29 +239,39 @@ class Client:
         return self.login()
 
 
-    def get_json_recovering(self, url, referer=None):
-        """get_json + 两级会话自愈：①磁盘重载 cookie ②真重登；每级只试一次。
+    def _cascade(self, op):
+        """会话自愈级联：①磁盘重载（免打网络）→ ②冷却 + 重登 → ③仍失败原样抛出。
 
-        覆盖两类会话失效（raw_get 已分开抛）：
-          - SessionExpired：被弹登录页（真掉线）
-          - RiskControl：被超星罚站【9010】（重载/重登常能立刻洗白，实测有效）
-        仍失败则把最后一次异常原样抛出——由上层给用户人话，绝不静默。
+        三级各自只试一次，绝不静默吞错。RISK_COOLDOWN_S 冷却的理由见 RiskControl 文档。
         """
         last = None
         try:
-            return self.get_json(url, referer=referer)
+            return op()
         except (SessionExpired, RiskControl) as e:
             last = e
         self.reload_cookies()
         try:
-            return self.get_json(url, referer=referer)
+            return op()
         except (SessionExpired, RiskControl) as e:
             last = e
-        # 重登前的短冷却：风控看 IP 热度，刚被打满就立刻重登会被立刻再拦（实测）
-        time.sleep(RISK_COOLDOWN_S)
+        time.sleep(RISK_COOLDOWN_S)   # 风控跟 IP 热度走，刚被打满就立刻重登会被立刻再拦（实测）
         if self.recover_session():
-            return self.get_json(url, referer=referer)
+            return op()
         raise last
+
+    def get_json_recovering(self, url, referer=None):
+        """get_json + 会话自愈。覆盖 SessionExpired（被弹登录页）与 RiskControl（【9010】罚站）。"""
+        return self._cascade(lambda: self.get_json(url, referer=referer))
+
+    def raw_get_recovering(self, url, referer="https://mooc1.chaoxing.com/", timeout=30, headers=None):
+        """raw_get + 同样两级自愈。
+
+        必须有这个壳：领卷的第一跳（stat2 getWorkStuUrl）用的是裸 raw_get，
+        真环境实测它先被【9010】打中 → 异常直接冒到用户面前（日志里"2 秒就失败"，
+        根本没进冷却），自愈白写。
+        """
+        return self._cascade(lambda: self.raw_get(url, referer=referer, timeout=timeout,
+                                                  headers=headers))
 
     def get_json_retry_login(self, url, referer=None):
         """旧名保留（等价 get_json_recovering），领卷路径在用。"""
