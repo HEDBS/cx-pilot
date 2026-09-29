@@ -101,6 +101,43 @@ def retry_helper_exists():
 check("自愈入口齐备", retry_helper_exists, "no-raise")
 
 
+def login_page_not_self_blocked():
+    """要害回归：login() 自己要 GET passport2 登录页取 token；
+    请求本身就是登录页时必须放行，否则登录功能自我判死（曾真炸过）。"""
+    class FakeResp:
+        def __init__(self, final_url):
+            self._u = final_url
+
+        def geturl(self):
+            return self._u
+
+        def read(self):
+            return PLOGIN.encode()
+
+    class FakeOp:
+        def __init__(self, final_url):
+            self._u = final_url
+
+        def open(self, req, timeout=None):
+            return FakeResp(self._u)
+
+    c2 = Client()
+    # a) 请求别的页面却被弹到登录页 → 必须抛 SessionExpired
+    c2.op = FakeOp("https://passport2.chaoxing.com/login?fid=-1")
+    try:
+        c2.raw_get("https://mooc1.chaoxing.com/mooc-ans/work/isExpire?x=1")
+    except SessionExpired:
+        pass
+    else:
+        raise AssertionError("请求非登录页被弹登录页时未抛 SessionExpired")
+    # b) 请求本身就是 passport2 登录页 → 必须放行（login() 靠它取 token）
+    c2.op = FakeOp("https://passport2.chaoxing.com/login?fid=-1")
+    c2.raw_get("https://passport2.chaoxing.com/login?fid=-1&refer=x")
+
+
+check("登录页自身请求不被误判掉线", login_page_not_self_blocked, "no-raise")
+
+
 def msg_has_code():
     try:
         c.raw_get(base + "/risk")

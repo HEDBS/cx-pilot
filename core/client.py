@@ -90,11 +90,14 @@ class Client:
             final = resp.geturl() or ""
         except Exception:
             pass
-        if "passport2.chaoxing.com" in final and "/login" in final:
-            raise SessionExpired("会话过期：被重定向到学习通登录页（%s）" % final[:80])
-        if ("passport2.chaoxing.com/login" in body and
-                ("扫码登录" in body or "用户登录" in body or "手机号登录" in body)):
-            raise SessionExpired("会话过期：返回学习通登录页")
+        # 要害：login() 自己就是去 GET passport2 登录页取表单 token 的，**请求本身就是登录页时
+        # 不算掉线**，否则登录功能会被自己判死（2026-09-29 自查发现并修）。
+        if "passport2.chaoxing.com" not in url:
+            if "passport2.chaoxing.com" in final and "/login" in final:
+                raise SessionExpired("会话过期：被重定向到学习通登录页（%s）" % final[:80])
+            if ("passport2.chaoxing.com/login" in body and
+                    ("扫码登录" in body or "用户登录" in body or "手机号登录" in body)):
+                raise SessionExpired("会话过期：返回学习通登录页")
         # 风控/掉线特征页：~820-910B 的「温馨提示/提交失败」
         if len(body) < 1200 and ("温馨提示" in body or "提交失败" in body or "没有此页面访问权限" in body):
             raise SessionExpired("error page: " + re.sub(r"\s+", " ", strip_html(body))[:80])
