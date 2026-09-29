@@ -119,6 +119,7 @@ def refresh_all(client, max_courses=None, delay=(0.6, 1.4), progress=None):
     if max_courses:
         trips = trips[:max_courses]
     all_w = []
+    risk_skipped = []
     for i, (cid, cls, cpi, name) in enumerate(trips):
         if progress:
             try:
@@ -130,15 +131,25 @@ def refresh_all(client, max_courses=None, delay=(0.6, 1.4), progress=None):
             all_w.extend(ws)
             print("[%d/%d] %s -> %d 条" % (i + 1, len(trips), name[:18], len(ws)))
         except RiskControl:
-            # 单课中途被罚站：重登后只重试这一课；仍被拦就中止（不静默丢课）
-            if not client.recover_session():
-                raise
-            ws = _works_of_course(client, cid, cls, cpi, name)
-            all_w.extend(ws)
-            print("[%d/%d] %s -> %d 条（重登后重试）" % (i + 1, len(trips), name[:18], len(ws)))
+            # 单课中途被罚站：只做**免费**的磁盘重载再试一次。
+            # 不要在这里逐课重登——那会连发几十次登录请求被超星限流，
+            # 表现就是进度条冻住（实测踩过）。仍被拦→跳过这一课并记账，
+            # 绝不整轮中止，也绝不静默（末尾汇总）。
+            client.reload_cookies()
+            try:
+                ws = _works_of_course(client, cid, cls, cpi, name)
+                all_w.extend(ws)
+                print("[%d/%d] %s -> %d 条（重载 cookie 后重试）"
+                      % (i + 1, len(trips), name[:18], len(ws)))
+            except RiskControl as e2:
+                risk_skipped.append(name)
+                print("[%d/%d] %s 风控跳过：%s" % (i + 1, len(trips), name[:18], str(e2)[:50]))
         except Exception as e:
             print("[%d/%d] %s ERR %s" % (i + 1, len(trips), name[:18], str(e)[:60]))
         time.sleep(delay[0] + random.random() * (delay[1] - delay[0]))
+    if risk_skipped:
+        print("⚠ 有 %d 门课被风控跳过（%s）——等 1-2 分钟冷后再扫一次即可补齐，不是没作业"
+              % (len(risk_skipped), "、".join(risk_skipped[:4])))
     if progress:
         try:
             progress(len(trips), len(trips))
