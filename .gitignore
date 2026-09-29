@@ -10,3 +10,6 @@ nul*
 docs/TASK-*.md
 docs/claude-*.md
 docs/HANDOFF*
+shell/node_modules/
+shell/src-tauri/target/
+shell/dist/

@@ -7,6 +7,7 @@
 import json
 import os
 import re
+import socket
 import time
 import urllib.error
 import urllib.parse
@@ -54,8 +55,10 @@ def load_settings():
         # "model":"...","key_ref":"..."或"api_key":"直接粘贴的key","enabled":true}。
         # 不迁移旧文件：缺省即空（识图链只剩本地 OCR，全挂走人工）。
         "vision_providers": [],
-        "proxy": "http://127.0.0.1:7897",
-        "use_proxy_for": ["groq", "openrouter", "pollinations"],  # key_ref/name 命中则走代理
+        # M3 C1：默认直连（空=不用代理）——陌生干净机器上没有任何理由假设本地代理端口在跑。
+        # 用户在 settings.json 里显式写过的 proxy/use_proxy_for 经 merge 照常沿用。
+        "proxy": "",
+        "use_proxy_for": [],  # key_ref/name 命中则走代理
         "choice_strategy": "generate",   # generate | logprob(local)
         "confidence_threshold": 0.75,
         "rate_limit_s": [1.0, 2.5],
@@ -74,7 +77,45 @@ def save_settings(s):
         json.dump(s, f, ensure_ascii=False, indent=1)
 
 
+# ---------- M3 B1：代理连通性探测（本函数区域内新增，协议/签名零改动） ----------
+# 盘上配置的 proxy（用户自设的本地代理端口）不保证在跑：旧 _opener 无条件走它 →
+# 连接被拒 WinError 10061 打穿整条后端链。探测不通则临时直连并只警告一次（不刷屏），
+# 结果短期缓存避免每题重复探测；通或未配置 proxy 时行为与旧版完全一致。
+_PROXY_PROBE_TTL = 5.0          # 探测结果缓存秒数
+_PROXY_CONNECT_TIMEOUT = 0.6    # 单次 TCP 探测超时
+_proxy_probe_cache = {}         # proxy 串 -> (monotonic 时刻, 是否可达)
+_proxy_warned = set()           # 每个 proxy 进程内只警告一次
+
+
+def _proxy_alive(proxy):
+    """proxy 的 host:port 短超时 TCP 探测；结果缓存 _PROXY_PROBE_TTL 秒。"""
+    now = time.monotonic()
+    hit = _proxy_probe_cache.get(proxy)
+    if hit is not None and now - hit[0] < _PROXY_PROBE_TTL:
+        return hit[1]
+    ok = False
+    try:
+        u = urllib.parse.urlparse(proxy if "//" in proxy else "//" + proxy)
+        host = u.hostname
+        port = u.port or (443 if u.scheme == "https" else 80)
+        if host:
+            with socket.create_connection((host, int(port)),
+                                          timeout=_PROXY_CONNECT_TIMEOUT):
+                ok = True
+    except OSError:
+        ok = False
+    _proxy_probe_cache[proxy] = (now, ok)
+    return ok
+
+
 def _opener(proxy=None):
+    if proxy and not _proxy_alive(proxy):
+        if proxy not in _proxy_warned:
+            _proxy_warned.add(proxy)
+            # 不用「⚠」等非 GBK 字形：Windows 控制台 cp936 print 会 UnicodeEncodeError（§4.4 同族坑）
+            print("!! 代理 %s 探测不通，临时直连（%.1fs 探测超时；%ds 后重探；此警告只打一次）" %
+                  (proxy, _PROXY_CONNECT_TIMEOUT, _PROXY_PROBE_TTL))
+        proxy = None
     if proxy:
         return urllib.request.build_opener(
             urllib.request.ProxyHandler({"http": proxy, "https": proxy}))
@@ -117,14 +158,33 @@ def chat(cfg, keys, messages, max_tokens=60, temperature=0.0, timeout=45):
 
 
 def pollinations_chat(cfg, keys, messages, timeout=90):
-    """匿名兜底：GET /<prompt>，单并发。"""
+    """匿名兜底：GET /<prompt>，单并发。
+
+    M3 B1b：一切上游失败（HTTPError/URLError/超时/读解码）统一归一为 ProviderError，
+    与 chat() 失败语义一致——solver 只 except ProviderError，此前原样上抛会打穿整条链。
+    重试 2 次（短退避，与 chat() 对齐）；401/403/404 直接转 ProviderError 不重试。
+    签名与成功返回（文本）不变。"""
     prompt = messages[-1]["content"]
     url = "https://text.pollinations.ai/" + urllib.parse.quote(prompt[:1800]) + \
           "?model=" + urllib.parse.quote(cfg.get("model", "openai"))
     settings = load_settings()
     op = _opener(settings.get("proxy"))
-    r = op.open(urllib.request.Request(url, headers={"User-Agent": UA}), timeout=timeout)
-    return r.read().decode("utf-8", "replace")
+    last = None
+    for attempt in range(3):
+        try:
+            r = op.open(urllib.request.Request(url, headers={"User-Agent": UA}), timeout=timeout)
+            return r.read().decode("utf-8", "replace")
+        except Exception as e:
+            last = e
+            try:
+                msg = e.read().decode("utf-8", "replace")[:150]
+            except Exception:
+                msg = str(e)[:150]
+            if isinstance(e, urllib.error.HTTPError) and e.code in (401, 403, 404):
+                raise ProviderError("HTTP %s: %s" % (e.code, msg))
+            if attempt < 2:
+                time.sleep(2 + attempt * 3)
+    raise ProviderError(str(last)[:150])
 
 
 CHOICE_PROMPT = """你是答题引擎。从选项中选出正确答案。

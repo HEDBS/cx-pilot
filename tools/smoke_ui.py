@@ -397,7 +397,7 @@ def t_approvals():
         questions=[1, 2, 3], pending=lambda: [3], state="done")
     key = "smoke:approve"
     st["jobs"][key] = (job, [1, 2, 3], {},
-                       {"course": "软件开发安全", "title": "2026第一次作业", "workId": "f0"})
+                       {"course": "软件工程导论", "title": "2026第一次作业", "workId": "f0"})
     st["approve"].add(key)
     app_v2.render_approvals()    # 广播渲染
     lv = S.approve_list
@@ -814,13 +814,13 @@ def t_works_blacklist():
     assert "分组任务" in W.TITLE_EXCLUDES and "PBL" in W.TITLE_EXCLUDES
     for kw in ("随堂练习", "测验", "考试"):
         assert kw not in W.TITLE_EXCLUDES, "「%s」不应再被入口误杀（审核层接管）" % kw
-    assert not W._excluded_title("随堂练习1——List"), "「随堂练习」应入库交审核判定"
+    assert not W._excluded_title("随堂练习1——集合"), "「随堂练习」应入库交审核判定"
     assert not W._excluded_title("第五章测验"), "「测验」应入库交审核判定"
     assert W._excluded_title("分组任务(PBL)——第2周"), "「分组任务/PBL」应被剔除"
     assert not W._excluded_title("作业B1"), "真作业不应误杀"
     assert not W._excluded_title(""), "空标题不炸"
     # 解析级：假 getAllWork HTML 4 条 → 只有真作业入库
-    titles = ["随堂练习1——List", "分组任务(PBL)", "期中测验", "作业B1"]
+    titles = ["随堂练习1——集合", "分组任务(PBL)", "期中测验", "作业B1"]
     wl = "".join('<div class="titTxt"><a class="inspectTask" data="%d" data2="%d" '
                  'data3="7" title="%s">t</a>'
                  '<strong>待做</strong><span>截止时间：</span>2026-10-01 23:59</div>'
@@ -832,7 +832,7 @@ def t_works_blacklist():
                 return "<a href='/work/getAllWork?courseid=9&clazzid=8&cpi=7'>w</a>"
             return wl
     ws = W._works_of_course(FC(), "9", "8", "7", "《课程A》")
-    assert [w.title for w in ws] == ["随堂练习1——List", "期中测验", "作业B1"], \
+    assert [w.title for w in ws] == ["随堂练习1——集合", "期中测验", "作业B1"], \
         "v0.3.1: 仅「分组任务(PBL)」入口剔除，其余交审核验真: %s" % [w.title for w in ws]
 
 

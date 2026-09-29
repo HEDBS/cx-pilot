@@ -32,7 +32,6 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    version='C:/Users/lenovo/AppData/Local/Temp/fb531024-6eae-4e85-ba31-81d5b69e52bf',
     icon=['assets_app.ico'],
 )
 coll = COLLECT(

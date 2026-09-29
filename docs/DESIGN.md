@@ -60,3 +60,77 @@ Flutter 实现（Flet 28 个 Cupertino 组件 + Blur/SegmentedButton/Dismissible
 - **忙碌文案写 `button.text`**——FilledButton **没有** value 属性，btn.value 是死属性永不上屏。
 - **扫描进度条**：卡片区顶部横向 ProgressBar（宽=内容区，ACCENT/PROG_TRACK，圆角随令牌），
   随 progress n/total 推进，完成 0.5s 后隐藏；按钮实时「扫描中 n/36…」。
+
+## M4 视觉重制（2026-09-29 · Tauri/webview 壳）
+
+> 适用范围：`shell/src/styles.css`（webview 壳）。上文 B3/B3d 记录的 Flet 面（`core/theme.py`）
+> 保持原样；两套并存，**结构/布局/尺寸零改动**，只改颜色、形状与动效表现。风格：高级简约。
+> 实现与逐条实测见 `docs/TASK-M4-visual.md` §四。
+
+### 双主题令牌表
+`:root` = 亮（既有定稿，零视觉回归）；`html[data-theme="dark"]` = 暗（对齐 §深色模式草案，
+灰阶按预览 v3 微调）。由 `theme.js` 置 `documentElement.dataset.theme`，
+`index.html` 内联 pre-paint 引导脚本先行落定（防首帧闪色）。模式 `system`（默认）/`light`/`dark`，
+持久化 `localStorage["cx.theme"]`，顶栏 `#theme-btn` 三态循环。
+
+| 令牌 | 亮 | 暗 |
+|---|---|---|
+| `--ink` / `--ink2` / `--ink3` | `#1C1C1E` / `#6E6E73` / `#AEAEB2` | `#ECEEF2` / `#A3A9B8` / `#6E7484` |
+| `--bg` / `--card` | `#F2F2F7` / `#FFF` | `#1C1C1E` / `#2C2C2E` |
+| `--accent` / `--accent-soft` | `#0A84FF` / `rgba(10,132,255,.12)` | 同左 / `rgba(10,132,255,.20)` |
+| `--sep` | `rgba(60,60,67,.12)` | `rgba(255,255,255,.12)` |
+| `--chip` / `--chip-hi` / `--track` | `rgba(120,120,128,.12/.10/.16)` | `.28/.22/.32` |
+| `--mask` | `rgba(0,0,0,.32)` | `rgba(0,0,0,.55)` |
+| `--orange` / `--green` / `--violet` | `#FF9F0A` / `#34C759` / `#5E5CE6` | `#FFB340` / `#4CD263` / `#8B88F0` |
+| `--warn-fg` / `--ok-fg` | `#C77700` / `#1D8F3E` | `#F0A848` / `#57D47C` |
+| `--shadow` (soft → lift) | 黑系 `rgba(0,0,0,.04~.16)` | 深黑系 `rgba(0,0,0,.35~.60)` |
+| `--radius` / `--radius-card` | `14px` / **`16px`**（M4：卡片 14→16） | 同左 |
+
+**纪律**：令牌块之外**不得**出现任何 `background`/`color` 字面量（闸=`tools/theme_probe.mjs`
+TH2 静态断言）；暗色下不得残留亮色硬编码。`color-scheme` 随主题切换（原生控件/滚动条跟随）。
+
+### 液态玻璃配方（仅 chrome）
+**Apple Liquid Glass 的 Web 诚实近似**（taste-skill 附录 C），**非 Apple 官方材质**。
+取舍（预览 v3 已验收）：玻璃**只上**标题栏 / 侧栏 / 底栏 / 弹窗 / 按钮；
+**内容卡片不上玻璃**——卡内是长文本，模糊毁可读性，改用近不透明 `--card` + 细描边 + 软阴影。
+
+```
+.lg {
+  border: 1px solid var(--glass-border);
+  background: linear-gradient(135deg, var(--glass-fill-a), var(--glass-fill-b)), var(--glass-base);
+  backdrop-filter: blur(22px) saturate(180%) contrast(1.04);
+  box-shadow: inset 0 1px 0 var(--glass-inset), var(--glass-shadow);
+}
+.lg::before {  /* 径向边缘折射高光：circle at 20% 0% */
+  background: radial-gradient(circle at 20% 0%, var(--glass-hi), transparent 36%);
+}
+```
+
+亮/暗**两套完整定义**（`--glass-*` 令牌各有亮暗值）。两条强制回退：
+`@media (prefers-reduced-transparency: reduce)` → 转实色 `--card` 且关 `backdrop-filter`；
+`@supports not ((backdrop-filter: …) or (-webkit-backdrop-filter: …))` → 转实色。
+弹窗遮罩另起一层 `blur(2px)`，与玻璃面分层。
+
+### 流光规格（Aurora Background · 已按性能红线降级）
+来源：Aceternity UI / React Bits「Aurora Background」。三层构成：
+① `repeating-linear-gradient(100deg, …)` 多层彩色条纹（白条 + `--a1/--a2/--a3` 三色相间）
+＋`background-size: 300%,200%`；② `::after` 同款渐变 + `mix-blend-mode: difference` 叠纵深；
+③ `mask-image: radial-gradient(ellipse at 100% 0%, …)` 收束辉光到右上 + `filter: blur(11px)`。
+三色令牌：亮 `#2F6BFF/#8AA0FF/#35C7C0`、暗 `#2E5BFF/#7C6BFF/#17A79B`；
+浓度 `--aurora-opacity`（亮 `.55` / 暗 `.62`），内容区另叠 `--scrim` 遮罩保证可读性。
+
+**降级记录（重要）**：原规格为 `background-position 50%→350% / 60s linear infinite` 的**匀速位移**。
+实测该位移属**重绘**而非合成，在 `--disable-gpu`（验收闸同条件）下 rAF 中位由 16.6ms 恶化到
+22.4~31.9ms，击穿 `anim_probe` A1「帧率中位≤20ms」闸（M4 前为 16ms）。故按 §T2 红线改为
+**静态多层渐变 + 极慢 opacity 呼吸**：`#aurora` 挂 `aurora-breathe-l|-d`
+（26s `ease-in-out alternate`，端点写**数值字面量**——写 `calc(var(…))` 会让动画掉出合成器，
+实测在 16.8↔26.8ms 摇摆）。渐变本体、blur、difference、径向遮罩、三色令牌全部保留。
+挂点必须在**外层 `#aurora`**（该层无 filter/mask/blend）：挂内层 `.layer` 实测 36.3~59.2ms。
+GPU 下各分支均 6.1ms（流光几乎免费）；若需完全确定性的帧预算，可删 `animation-name` 一行
+退回纯静态（实测恒 16.6ms）。`document.hidden` → `html.aurora-paused` 暂停；
+`prefers-reduced-motion: reduce` → 停呼吸、保留渐变本体。
+
+### 动效（与 M2 一致，未改判据）
+统一曲线 `--ease = cubic-bezier(0.65,0,0.35,1)`（Apple emphasized）＝ `flip.js` 的 `EASE`。
+新增屏级切换：`#main` 内 `.scr` 进出 `translateY(±16px)+opacity` 450ms（WAAPI，可打断接续），
+只动屏级容器、不进卡片层；`reduce` → 纯淡入淡出 250ms 无位移。A1–A9 既有动效全部保留。

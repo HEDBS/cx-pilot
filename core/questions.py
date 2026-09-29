@@ -51,6 +51,21 @@ def parse_work_page(html):
             if q["image_flag"] is False and q["options"] == {}:
                 # 兜底：选项可能整块含图
                 q["image_flag"] = bool(re.search(r'choice%s' % qid, ch))
+        elif qtype == "judge":
+            # 判断题（真卷实测 2026-09-29）：题面是 <span data="true">A</span><p>对</p>
+            # 与 <span data="false">B</span><p>错</p>；提交值是 data 的原值（true/false），
+            # 不是字母 A/B（页面 addChoice 直接取 data 写进 hidden answer{qid}）。
+            # 旧正则只认 data="[A-G]"，判断题被整类漏掉 → options 空 → 恒 noviable。
+            jmap = {}
+            for om in re.finditer(
+                    r'<span[^>]*data="(true|false)"[^>]*class="choice%s[^"]*"[^>]*>[A-G]</span>\s*'
+                    r'<div[^>]*class="fl answer_p"[^>]*>(.*?)</div>' % qid, ch, re.S):
+                letter = "A" if om.group(1) == "true" else "B"
+                label = strip_html(om.group(2))[:20]
+                q["options"][letter] = label or ("对" if letter == "A" else "错")
+                jmap[letter] = om.group(1)
+            if jmap:
+                q["judge_map"] = jmap   # 字母 -> true/false，提交层据此还原协议值
         if qtype == "blank":
             # 真卷实测(2026-09-28)：空数权威来源是 hidden tiankongsize{qid}；
             # 下划线在题图里，stem 文本数不到 → 旧逻辑恒 1 是错的

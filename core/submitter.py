@@ -62,6 +62,12 @@ def build_form(qs, results, ctx, work_ref):
             form["tiankongsize%s" % q["qid"]] = str(len(blanks))
             for n, one in enumerate(blanks, 1):
                 form["answerEditor%s%d" % (q["qid"], n)] = _as_editor_html(one)
+        elif q["type"] == "judge":
+            # 判断题：hidden answertype{qid}=3；answer{qid} 必须是页面 data 原值
+            # true/false（实测 2026-09-29，非字母、非「对/错」）。
+            # 旧代码把它并进 else 分支写成 answertype=4（主观题），协议不符。
+            form["answertype%s" % q["qid"]] = "3"
+            form["answer%s" % q["qid"]] = (q.get("judge_map") or {}).get(ans, ans)
         else:
             form["answertype%s" % q["qid"]] = "4"
             form["answer%s" % q["qid"]] = ans or ""

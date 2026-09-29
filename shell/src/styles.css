@@ -1,0 +1,474 @@
+/* styles.css —— 设计令牌唯一来源 docs/DESIGN.md（2026-09-27 定稿 + B3/B3d 修订）。
+   M2 动效（M2 任务书 §0）：统一曲线 --ease = Apple emphasized cubic-bezier(0.65,0,0.35,1)
+   （与 flip.js 的 EASE 常量同值，两处必须一致）。只声明淡入淡出/颜色/阴影类 CSS 过渡；
+   卡片**位移**一律走 flip.js 的 WAAPI（transform-only），样式里绝不 transition 布局属性。
+   A7 进度条 width 200ms 是 §0 明写的唯一布局属性过渡（规格内例外）。
+   M4 视觉重制（TASK-M4 §1）：颜色改为 :root（亮）/html[data-theme=dark]（暗）双套令牌驱动
+   （theme.js 置 documentElement.dataset.theme）；背景=多层彩色流光（repeating-linear-gradient
+   + difference 叠加 + 径向遮罩；**已按 §T2 红线回退为静态渐变 + 极慢 opacity 呼吸**，
+   实测依据见文件末 §T2 块注释）；玻璃仅上 chrome（.lg 标题栏/侧栏/底栏/弹窗），
+   内容卡=近不透明 --card（可读性纪律）。尺寸/结构/布局零改动。 */
+
+/* ===================== T3 双主题令牌 =====================
+   亮值=既有定稿（零视觉回归），暗值对齐 DESIGN.md 深色草案（bg #1C1C1E / card #2C2C2E /
+   ink 反转 / accent 不变），灰阶按预览 v3 微调。禁止新增任何硬编码色（theme_probe 抽样为闸）。 */
+:root {
+  --ease: cubic-bezier(0.65, 0, 0.35, 1);
+  --accent: #0A84FF; --accent-soft: rgba(10,132,255,.12); --accent-ink: #fff;
+  --ink: #1C1C1E; --ink2: #6E6E73; --ink3: #AEAEB2;
+  --bg: #F2F2F7; --card: #FFF;
+  --sep: rgba(60,60,67,.12);
+  --chip: rgba(120,120,128,.12);          /* 徽标/分段/灰底胶囊 */
+  --chip-hi: rgba(120,120,128,.10);       /* hover 底 */
+  --track: rgba(120,120,128,.16);         /* 进度槽 */
+  --mask: rgba(0,0,0,.32);                /* 弹窗遮罩 */
+  --red: #FF3B30; --orange: #FF9F0A; --green: #34C759; --violet: #5E5CE6;
+  --warn-fg: #C77700; --ok-fg: #1D8F3E;
+  --radius: 14px; --radius-card: 16px;    /* M4 T5：卡片 14→16；--radius 留给控件/弹窗 */
+  --shadow: 0 1px 2px rgba(0,0,0,.04), 0 6px 20px rgba(0,0,0,.06);
+  --shadow-hi: 0 2px 4px rgba(0,0,0,.06), 0 10px 28px rgba(0,0,0,.10);
+  --shadow-lift: 0 4px 10px rgba(0,0,0,.10), 0 16px 40px rgba(0,0,0,.16);  /* 拖起（M3 I1 同值） */
+  --font: "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  /* T2 Aurora 三色：克制蓝-靛-青，禁霓虹（预览 v3 定稿） */
+  --a1: #2F6BFF; --a2: #8AA0FF; --a3: #35C7C0;
+  --aurora-opacity: .55;
+  --aurora-anim: aurora-breathe-l;   /* 呼吸 keyframes 按主题择名（数值字面量，见 §T2 注释） */
+  --scrim: .80;               /* 内容区遮罩浓度：越大越清晰、Aurora 越淡 */
+  /* T4 玻璃配方料（附录C 近似，非 Apple 官方） */
+  --glass-border: rgb(255 255 255 / .48);
+  --glass-fill-a: rgb(255 255 255 / .42);
+  --glass-fill-b: rgb(255 255 255 / .12);
+  --glass-base: rgb(255 255 255 / .30);
+  --glass-inset: rgb(255 255 255 / .60);
+  --glass-shadow: 0 14px 44px rgb(18 24 38 / .10);
+  --glass-hi: rgb(255 255 255 / .30);     /* ::before 径向高光 */
+  --btn-glass: rgb(255 255 255 / .55);    /* 次级按钮玻璃底 */
+  color-scheme: light;
+}
+html[data-theme="dark"] {
+  --ink: #ECEEF2; --ink2: #A3A9B8; --ink3: #6E7484;
+  --bg: #1C1C1E; --card: #2C2C2E;
+  --accent-soft: rgba(10,132,255,.20);
+  --sep: rgba(255,255,255,.12);
+  --chip: rgba(120,120,128,.28);
+  --chip-hi: rgba(120,120,128,.22);
+  --track: rgba(120,120,128,.32);
+  --mask: rgba(0,0,0,.55);
+  --orange: #FFB340; --green: #4CD263; --violet: #8B88F0;
+  --warn-fg: #F0A848; --ok-fg: #57D47C;
+  --shadow: 0 1px 2px rgba(0,0,0,.35), 0 6px 20px rgba(0,0,0,.45);
+  --shadow-hi: 0 2px 4px rgba(0,0,0,.40), 0 10px 28px rgba(0,0,0,.55);
+  --shadow-lift: 0 4px 10px rgba(0,0,0,.45), 0 16px 40px rgba(0,0,0,.60);
+  --a1: #2E5BFF; --a2: #7C6BFF; --a3: #17A79B;
+  --aurora-opacity: .62;
+  --aurora-anim: aurora-breathe-d;
+  --scrim: .78;
+  --glass-border: rgb(255 255 255 / .22);
+  --glass-fill-a: rgb(255 255 255 / .14);
+  --glass-fill-b: rgb(255 255 255 / .04);
+  --glass-base: rgb(20 24 34 / .30);
+  --glass-inset: rgb(255 255 255 / .30);
+  --glass-shadow: 0 14px 44px rgb(4 6 10 / .50);
+  --glass-hi: rgb(255 255 255 / .16);
+  --btn-glass: rgb(120 120 128 / .22);
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+[hidden] { display: none !important; }   /* author 规则会盖 UA [hidden]：五屏并排+遮罩事故 */
+html, body { height: 100%; }
+body { font-family: var(--font); background: var(--bg); color: var(--ink);
+       font-size: 13.5px; overflow: hidden;
+       transition: background .55s var(--ease), color .35s var(--ease); }   /* 切主题=柔和过渡 */
+.spacer { flex: 1; }
+button { font-family: inherit; cursor: pointer; }
+
+/* ===================== T2 Aurora Background（多层彩色流光） =====================
+   技术来源：Aceternity UI / React Bits「Aurora Background」经典实现（预览 v3 定稿）：
+     · repeating-linear-gradient(100deg) 多层彩色条纹（白条 + 三色相间）+ background-size 300%/200%
+     · ::after 同款渐变 + mix-blend-mode: difference 叠出层层纵深
+     · mask-image 径向收束辉光到右上
+   ≠「光斑」：那是几个 radial blur 圆，属另一回事。
+
+   —— §T2 性能红线：**已回退**（2026-09-29 实测）——
+   原实现为 `background-position 50%→350% / 60s linear infinite`。实测该位移是**重绘**而非
+   合成，在 --disable-gpu（headless 验收闸同条件）下 rAF 中位间隔：开 22.4/31.9ms、100382
+   同页 A-B-A 对照（开/关/开）；关掉位移（保留 blur/blend/遮罩）立刻回到 16.6ms，
+   整个 Aurora 层 display:none 为 16.7ms——即**全部掉帧代价来自 background-position 重绘**。
+   验收闸 anim_probe A1「帧率中位≤20ms」由 M4 前的 16ms 退化为 31ms（红线被击穿）。
+   （对照：加 GPU 后各分支均 6.1ms，流光本身在合成器上几乎免费；但闸跑在软件光栅下，
+   且任务书明令「现有验收闸必须不退化」。）
+   故按 TASK-M4 §T2 预设回退路径改为：**静态多层渐变 + 极慢 opacity 呼吸**——
+   渐变本体、blur、difference 叠加、径向遮罩、三色令牌全部保留，只把「重绘型位移」
+   换成「合成型 opacity」。其余红线照旧：will-change 提示、document.hidden 暂停
+   （theme.js 挂 html.aurora-paused）、reduced-motion 静止分支。
+
+   —— 呼吸挂点实测（同一 A-B-A 法，软件光栅）——
+   把 opacity 动画挂在**内层 .layer**（与 blur/mask/blended ::after 同层）仍要重绘：
+   36.3/59.2ms，等于没救。改挂**外层 #aurora**（该层自身无 filter/mask/blend，
+   opacity 是纯合成属性，内层栅格可缓存、只换 alpha）→ **16.6ms**，
+   与「完全静止」「整层关掉」持平。故呼吸挂外层。
+
+   —— keyframes 端点必须写数值字面量（同一挂点的二次实测）——
+   端点若写成 `calc(var(--aurora-opacity) * .62)`，会让该动画掉出合成器走主线程：
+   同页两轮实测在 16.8 / 16.9ms 与 25.5 / 26.0 / 26.8ms 之间摇摆（不稳定）；
+   换成纯数字字面量后稳定 16.6 / 16.6ms（=静止基线 16.8）。@property 注册 <number>
+   令牌再 calc 折算的方案同为 25.6 / 25.6ms，一并否决。
+   主题差异改由 `--aurora-anim` 选 keyframes 名解决——令牌化不丢，合成器不掉。 */
+#aurora { position: fixed; inset: 0; z-index: 0; pointer-events: none; overflow: hidden;
+  opacity: var(--aurora-opacity);
+  will-change: opacity;                       /* 合成型提示（非 background-position 重绘） */
+  animation-name: var(--aurora-anim);
+  animation-duration: 26s;
+  animation-timing-function: ease-in-out;
+  animation-iteration-count: infinite;
+  animation-direction: alternate; }
+#aurora .layer { position: absolute; inset: -20%;
+  background-image:
+    repeating-linear-gradient(100deg,
+      rgb(255 255 255 / .72) 0%, rgb(255 255 255 / .72) 7%,
+      transparent 10%, transparent 12%, rgb(255 255 255 / .72) 16%),
+    repeating-linear-gradient(100deg,
+      var(--a1) 10%, var(--a2) 15%, var(--a3) 20%, var(--a2) 25%, var(--a1) 30%);
+  background-size: 300%, 200%;
+  background-position: 50% 50%, 50% 50%;
+  filter: blur(11px);
+  mask-image: radial-gradient(ellipse at 100% 0%, #000 10%, transparent 72%);
+  -webkit-mask-image: radial-gradient(ellipse at 100% 0%, #000 10%, transparent 72%); }
+#aurora .layer::after { content: ""; position: absolute; inset: 0;
+  background-image:
+    repeating-linear-gradient(100deg,
+      #000 0%, #000 7%, transparent 10%, transparent 12%, #000 16%),
+    repeating-linear-gradient(100deg,
+      var(--a1) 10%, var(--a2) 15%, var(--a3) 20%, var(--a2) 25%, var(--a1) 30%);
+  background-size: 200%, 100%;
+  mix-blend-mode: difference; }
+/* 极慢呼吸：在**设计浓度**的 62%↔100% 之间来回（alternate），周期 26s——缓慢到近似
+   「静止的辉光在吐纳」，峰值不超过用户已验收的预览 v3 浓度。亮/暗各一套**数值字面量**
+   （亮 .55→.341、暗 .62→.384），由 --aurora-anim 择名——理由见上方 §T2 注释。 */
+@keyframes aurora-breathe-l { from { opacity: .341; } to { opacity: .55; } }
+@keyframes aurora-breathe-d { from { opacity: .384; } to { opacity: .62; } }
+html.aurora-paused #aurora { animation-play-state: paused; }
+
+/* ===================== T4 液态玻璃（仅 chrome） =====================
+   Apple Liquid Glass 的 Web 诚实**近似**（taste-skill 附录C）——Apple 官方无 liquid-glass.css，
+   此为 backdrop-filter + 双层内高光 + 径向折射高光的骨架近似，非官方材质。
+   用户已验收取舍（预览 v3）：玻璃只上 标题栏/侧栏/底栏/弹窗/按钮；
+   内容卡片不上玻璃（长文本，模糊毁可读性）→ 用近不透明 --card + 细描边 + 软阴影。 */
+.lg { position: relative; isolation: isolate;
+  border: 1px solid var(--glass-border);
+  background: linear-gradient(135deg, var(--glass-fill-a), var(--glass-fill-b)), var(--glass-base);
+  backdrop-filter: blur(22px) saturate(180%) contrast(1.04);
+  -webkit-backdrop-filter: blur(22px) saturate(180%) contrast(1.04);
+  box-shadow: inset 0 1px 0 var(--glass-inset), var(--glass-shadow); }
+.lg::before { content: ""; position: absolute; inset: 0; z-index: -1; border-radius: inherit;
+  pointer-events: none;
+  background: radial-gradient(circle at 20% 0%, var(--glass-hi), transparent 36%); }
+/* 无障碍/能力回退（任务书 T4 硬要求，两套都必须有） */
+@media (prefers-reduced-transparency: reduce) {
+  .lg { background: var(--card); backdrop-filter: none; -webkit-backdrop-filter: none; } }
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .lg { background: var(--card); } }
+
+/* ===================== 外壳（叠在 Aurora 之上） ===================== */
+/* ---------- 标题栏（玻璃 chrome） ---------- */
+#titlebar { height: 50px; display: flex; align-items: center; gap: 10px; padding: 0 16px;
+  position: relative; z-index: 2; border-bottom: 1px solid var(--glass-border); }
+.tb-title { font-size: 13.5px; font-weight: 600; color: var(--ink2); }
+.tb-title b { color: var(--ink); }
+.ver { font-size: 11px; color: var(--ink3); background: var(--chip);
+       padding: 2.5px 9px; border-radius: 999px; font-variant-numeric: tabular-nums; }
+.tb-status { font-size: 12px; color: var(--ink2); }
+.tb-status.ok { color: var(--ok-fg); } .tb-status.err { color: var(--red); }
+/* T3 顶栏主题切换（三态循环 system→light→dark）：右侧，不挤压 ver/tb-status */
+#theme-btn { display: flex; align-items: center; gap: 6px; padding: 5px 11px; flex: none;
+  border: none; border-radius: 999px; font-size: 12px; color: var(--ink2);
+  background: var(--btn-glass); box-shadow: inset 0 1px 0 var(--glass-inset);
+  transition: color .2s var(--ease); }
+#theme-btn:hover { color: var(--accent); }
+#theme-btn .tb-theme-ic { font-size: 12px; line-height: 1; }
+
+/* ---------- 骨架 ---------- */
+#frame { display: flex; height: calc(100vh - 50px); position: relative; z-index: 1; }
+/* M3 I2 折叠侧栏（§0 例外已在 M3 任务书 §二 I2 声明，验收记录同步标注）：
+   允许 #sidebar 用 width 过渡 450ms + emphasized——transform 无法让 #main 补位，容器收放必须动布局属性。
+   该例外**不外溢**到卡片动效（A1–A9 仍守 §0 transform/opacity only，anim_probe 9/9 为闸）。
+   方向编排：展开=宽先动、文字延迟淡入；折叠=文字先淡出(200ms)、宽延迟 .25s 再收（「opacity 先淡出再收宽」）。 */
+#sidebar { position: relative; width: 212px; flex: none; padding: 14px 10px;
+  overflow-y: auto; overflow-x: hidden;   /* overflow-x:hidden——collapsed 下 .side-sec nowrap 不产生横向滚动条 */
+  border-right: 1px solid var(--glass-border);
+  transition: width .45s var(--ease); }   /* 玻璃底由 index.html 的 class="lg" 提供 */
+#sidebar.collapsed { width: 66px; transition: width .45s var(--ease) .25s; }
+#sidebar.noanim, #sidebar.noanim * { transition: none !important; }   /* 启动恢复折叠态：无首帧动画 */
+#sidebar .lbl, #sidebar .bn, #sidebar .side-badge, #sidebar .conn {
+  transition: opacity .25s var(--ease) .3s; }
+#sidebar.collapsed .lbl, #sidebar.collapsed .bn, #sidebar.collapsed .side-badge,
+#sidebar.collapsed .conn {
+  opacity: 0; transition: opacity .2s var(--ease); }
+.side-item { display: flex; align-items: center; gap: 10px; padding: 8px 12px;
+  border-radius: 9px; font-size: 13.5px; color: var(--ink2); margin-bottom: 2px;
+  user-select: none; position: relative; z-index: 1; overflow: hidden; white-space: nowrap; }
+.side-item .ic { width: 20px; height: 20px; border-radius: 6px; flex: none; color: var(--accent-ink);
+  font-size: 12px; font-weight: 700; display: flex; align-items: center; justify-content: center;
+  background: var(--accent); }
+.side-item .ic.violet { background: var(--violet); } .side-item .ic.gray { background: var(--ink3); }
+.side-item .ic.green { background: var(--green); }
+/* M3 I3：选中底色移到常驻指示器 #side-pill（transform-only 滑动），
+   .active 仅留文字色/字重——不再逐项切背景（瞬变）。底色必须保持透明（nav_probe N1 断言）。 */
+.side-item.active { color: var(--accent); font-weight: 600; }
+/* 单个绝对定位指示器：translateY 450ms emphasized（main.js WAAPI）；
+   left/right 内缩=宽随 #sidebar 收放自动跟随（与 I2 协同，无需 JS 改尺寸）。 */
+#side-pill { position: absolute; top: 0; left: 10px; right: 10px; height: 37px;
+  border-radius: 9px; background: var(--accent-soft); pointer-events: none; z-index: 0;
+  transform: translateY(0); }
+.side-fold { margin-top: 10px; padding: 6px 12px; font-size: 13px; color: var(--ink3);
+  border-radius: 9px; cursor: pointer; user-select: none; text-align: center;
+  position: relative; z-index: 1; }
+.side-fold:hover { color: var(--accent); background: var(--chip-hi); }
+.side-item .conn { margin-left: auto; font-size: 11px; color: var(--ok-fg); }
+.side-item .bn { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.side-sec { font-size: 11px; color: var(--ink3); font-weight: 600; letter-spacing: .03em;
+  padding: 16px 12px 6px;
+  /* 折叠态定高关键：66px 宽时内容区仅 ~22px，「系统/后端」两个 CJK 字会换行成两行，
+     把下方 .side-item 整体顶下 ~15px → 图标位移 + #side-pill 偏移。nowrap 锁一行。 */
+  white-space: nowrap; overflow: hidden; }
+.side-badge { margin-left: auto; background: var(--red); color: var(--accent-ink); font-size: 10.5px;
+  font-weight: 700; min-width: 18px; height: 17px; border-radius: 9px; padding: 0 5px;
+  display: flex; align-items: center; justify-content: center; }
+/* T1/T2：#main 用半实底遮罩（--scrim），Aurora 从内容区淡淡透出；卡片自身近不透明不受扰 */
+#main { flex: 1; min-width: 0; position: relative; display: flex;
+  background: color-mix(in srgb, var(--bg) calc(var(--scrim) * 100%), transparent); }
+.scr { flex: 1; min-width: 0; display: flex; flex-direction: column;
+  padding: 18px 22px; overflow: hidden; }
+/* T1 切屏滑动的离场遮罩：离屏绝对定位浮层淡出（不占 flex 位，进屏即刻占满，
+   无双栏挤压=不动布局结构），动画本体由 main.js WAAPI 驱动（可打断接续）。 */
+.scr-leave { position: absolute; inset: 0; z-index: 3; pointer-events: none; }
+
+/* ---------- 工具条/控件 ---------- */
+.toolbar { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; flex: none; }
+.h1 { font-size: 20px; font-weight: 700; letter-spacing: -.02em; }
+.hint { font-size: 11.5px; color: var(--ink3); }
+/* A5 分段控件：底=独立 .seg-thumb 元素，translateX 滑移 200ms（plan.js WAAPI）；
+   选中段本身只变文字色/字重（瞬时，无布局属性动画）。 */
+.seg { display: flex; background: var(--chip); border-radius: 9px; padding: 2px;
+  position: relative; }
+.seg span { font-size: 12.5px; padding: 5px 13px; border-radius: 7px; color: var(--ink2);
+  user-select: none; cursor: pointer; position: relative; z-index: 1; }
+.seg span.on { color: var(--ink); font-weight: 600; }
+.seg-thumb { position: absolute; left: 0; top: 2px; background: var(--card); border-radius: 7px;
+  box-shadow: 0 1px 4px rgba(0,0,0,.12); pointer-events: none; }
+.btn { font-size: 12.5px; font-weight: 600; border: none; padding: 7px 15px;
+  border-radius: 9px; position: relative; }
+.btn.blue { background: var(--accent); color: var(--accent-ink);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / .22), 0 4px 14px rgb(10 132 255 / .28); }
+/* 次级/幽灵按钮=轻量玻璃（T4：按钮属 chrome）；reduced-transparency/@supports 回退随 .lg-* 组 */
+.btn.grey, .btn.ghost { backdrop-filter: blur(12px) saturate(160%);
+  -webkit-backdrop-filter: blur(12px) saturate(160%); }
+.btn.grey { background: var(--btn-glass); color: var(--ink2);
+  box-shadow: inset 0 1px 0 var(--glass-inset), 0 0 0 1px var(--sep) inset, 0 2px 10px rgb(18 24 38 / .06);
+  font-weight: 500; }
+.btn.dark { background: var(--ink); color: var(--bg); font-size: 13px; padding: 8px 18px;
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / .18); }   /*  ink 反转=暗底浅字/浅底深字，两主题同式 */
+.btn.tiny { font-size: 11.5px; padding: 4px 10px; }
+.btn.ghost { background: var(--btn-glass); color: var(--accent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent) inset; }
+.btn:disabled { opacity: .5; cursor: wait; }
+@media (prefers-reduced-transparency: reduce) {
+  .btn.grey, .btn.ghost { background: var(--card); backdrop-filter: none;
+    -webkit-backdrop-filter: none; } }
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .btn.grey, .btn.ghost { background: var(--card); } }
+.fld { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--ink2); }
+.fld input { border: 1px solid var(--sep); border-radius: 8px; padding: 7px 10px;
+  font-size: 13px; font-family: inherit; background: var(--card); color: var(--ink); }
+.fld.inline { flex-direction: row; align-items: center; gap: 6px; }
+.fld.inline input { width: 160px; padding: 4px 8px; }
+
+/* ---------- 扫描进度条（§3：平滑推进 + 文字不抖） ---------- */
+.scanbar { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; flex: none; }
+.prog { height: 6px; border-radius: 3px; background: var(--track); overflow: hidden; flex: 1; }
+.prog i { display: block; height: 100%; width: 0; background: var(--accent);
+  border-radius: 3px; transition: width .2s var(--ease); }   /* A7：200ms 平滑推进（§0 明写的唯一布局属性过渡） */
+.prog.wide { height: 5px; flex: none; width: 120px; }
+.scan-text { font-size: 12.5px; color: var(--ink2); min-width: 96px; text-align: right;
+  font-variant-numeric: tabular-nums; }                /* 数字等宽=不抖 */
+
+/* ---------- 作业计划画布（常驻元素 + 绝对定位，承 mock-3modes；动效留 M2） ---------- */
+.stage { flex: 1; min-height: 0; position: relative; }
+.plan-stage { overflow-x: auto; overflow-y: hidden; }
+.canvas { position: relative; margin: 0 auto; min-height: 100%; }
+/* A1/A2：列头常驻不重建；时间流模式整批淡出（opacity 250ms，非 display 翻转——
+   display:none 会掐断渐隐且违反「不重建」前提）。位移走 flip.js WAAPI。 */
+.col-h { position: absolute; height: 32px; display: flex; align-items: center; gap: 8px;
+  cursor: pointer; user-select: none; transition: opacity .25s var(--ease); }
+.col-h.dim { opacity: 0; pointer-events: none; }
+.col-h .dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+.col-t { font-size: 13.5px; font-weight: 700; letter-spacing: -.01em; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; max-width: 220px; }
+.col-n { font-size: 11px; color: var(--ink3); font-weight: 600; }
+.eye { font-size: 11px; color: var(--ink3); white-space: nowrap; }   /* B3d：👁 常显 */
+.col-h:hover .eye { color: var(--accent); }
+/* A6：hover 阴影升起 150ms（阴影=paint-only，非布局属性，合规） */
+.card { background: var(--card); border-radius: var(--radius-card); box-shadow: var(--shadow);
+  border: 1px solid var(--sep);
+  transition: box-shadow .15s var(--ease), opacity .25s var(--ease), border-color .2s var(--ease); }
+.card:hover { box-shadow: var(--shadow-hi); }
+.card.task { position: absolute; padding: 0; overflow: hidden; }
+.task .row { display: flex; align-items: flex-start; padding: 14px 16px; gap: 12px; }
+/* A6 勾选：蓝描边+背景 150ms 过渡 */
+.chk { width: 20px; height: 20px; border-radius: 50%; border: 1.6px solid var(--ink3);
+  flex: none; cursor: pointer; margin-top: 3px;
+  transition: background-color .15s var(--ease), border-color .15s var(--ease); }
+.chk.on { background: var(--accent); border-color: var(--accent); position: relative; }
+.chk.on::after { content: "✓"; color: var(--accent-ink); font-size: 11px; font-weight: 800;
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
+.body { flex: 1; min-width: 0; }
+.r-title { font-size: 14.5px; font-weight: 600; line-height: 1.45;
+  overflow-wrap: anywhere; }                            /* 完整显示不截断 */
+.r-sub { font-size: 12.5px; color: var(--ink2); margin-top: 4px; line-height: 1.5; }
+.r-meta { margin-left: auto; display: flex; align-items: center; gap: 9px; flex: none;
+  padding-top: 2px; }
+.qn { font-size: 12px; color: var(--ink2); white-space: nowrap; }
+/* A9：审核落定时 pill 文字原地换 + 色底灰化 250ms（同一节点，textContent 换字） */
+.pill { font-size: 11.5px; font-weight: 600; padding: 4px 11px; border-radius: 999px;
+  white-space: nowrap; transition: background-color .25s var(--ease), color .25s var(--ease); }
+.pill.urgent { background: color-mix(in srgb, var(--red) 13%, transparent); color: var(--red); }
+.pill.warn   { background: color-mix(in srgb, var(--orange) 15%, transparent); color: var(--warn-fg); }
+.pill.ok     { background: color-mix(in srgb, var(--green) 14%, transparent); color: var(--ok-fg); }
+.pill.grey   { background: var(--chip); color: var(--ink2); }
+.pill.run    { background: var(--chip); color: var(--accent); }
+.preview { padding: 0 16px 12px 48px; font-size: 11.5px; color: var(--ink3);
+  border-top: .5px solid var(--sep); padding-top: 8px; }
+.card.task.excluded { opacity: .35; }                  /* 交互规则1：置灰仍可勾选 */
+.card.task.unsolvable { opacity: .55; }
+.card.task.unsolvable .chk { border-style: dashed; cursor: not-allowed; }
+.ex-flag { font-size: 10.5px; color: var(--ink2); background: var(--chip);
+  padding: 2.5px 9px; border-radius: 999px; white-space: nowrap; }
+/* A3 恢复条：opacity 淡入淡出（常驻元素，display 不翻转） */
+.restorebar { position: absolute; display: flex; align-items: center; height: 34px;
+  opacity: 0; pointer-events: none; transition: opacity .25s var(--ease); }
+.restorebar.vis { opacity: 1; pointer-events: auto; }
+.restorebar .ex-flag { cursor: pointer; }
+
+/* ---------- 底栏（常驻：已选数/用时/提交模式/主按钮；T4=玻璃 chrome） ---------- */
+.bottombar { display: flex; align-items: center; gap: 12px; padding: 11px 15px;
+  margin-top: 14px; flex: none;
+  border-radius: var(--radius-card); font-size: 12.5px; color: var(--ink2); }
+/* 玻璃底由 plan.js 的 class="bottombar lg" 提供 */
+.bottombar b { color: var(--ink); font-variant-numeric: tabular-nums; }
+
+/* ---------- 队列/审批通用列表 ---------- */
+.list-scroll { overflow-y: auto; display: flex; flex-direction: column; gap: 14px; padding-bottom: 16px; }
+.empty { color: var(--ink3); font-size: 12.5px; padding: 40px 10px; text-align: center; }
+.job-card { padding: 14px 16px; }
+.job-h { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.job-h .jt { font-size: 14.5px; font-weight: 600; }
+.job-h .jn { font-size: 12px; color: var(--ink2); font-variant-numeric: tabular-nums; }
+/* M3b R4：删卡 ×（常显防找不到入口；误删有二次确认兜底）+ R1 已中断说明行 */
+.card-del { flex: none; width: 24px; height: 24px; border: none; border-radius: 6px;
+  background: transparent; color: var(--ink3); font-size: 16px; line-height: 1;
+  cursor: pointer; transition: background-color .15s ease, color .15s ease; }
+.card-del:hover { background: color-mix(in srgb, var(--red) 13%, transparent); color: var(--red); }
+.jnote { font-size: 11.5px; color: var(--warn-fg); }
+.qs { margin-top: 10px; }
+.q-row { display: flex; align-items: flex-start; gap: 10px; padding: 9px 0;
+  border-top: .5px solid var(--sep); flex-wrap: wrap; }
+.q-main, .q-head { display: flex; align-items: baseline; gap: 8px; min-width: 0; flex: 1; }
+.q-type { font-size: 11px; font-weight: 700; color: var(--violet); flex: none;
+  background: color-mix(in srgb, var(--violet) 12%, transparent); padding: 2px 8px; border-radius: 999px; }
+.q-stem { font-size: 12.5px; color: var(--ink); overflow-wrap: anywhere; }
+.q-ans { font-size: 12px; color: var(--ok-fg); max-width: 240px; overflow-wrap: anywhere; }
+.q-row.need-manual { background: color-mix(in srgb, var(--red) 5%, transparent); border-radius: 8px; padding: 9px 8px; }
+.q-row.low .q-ans { color: var(--warn-fg); }
+.img-flag { font-size: 10.5px; color: var(--accent-ink); background: var(--orange);
+  border-radius: 5px; padding: 1px 6px; flex: none; }
+.manual-panel { flex-basis: 100%; display: flex; flex-direction: column; gap: 6px;
+  padding: 8px 10px; background: color-mix(in srgb, var(--ink3) 10%, transparent); border-radius: 9px; }
+.manual-panel textarea { font-family: var(--font); font-size: 12.5px; border: 1px solid var(--sep);
+  border-radius: 8px; padding: 6px 9px; resize: vertical; min-height: 30px;
+  background: var(--card); color: var(--ink); }
+.mp-tip { font-size: 11.5px; color: var(--warn-fg); }
+.manual-panel .btn { align-self: flex-end; }
+
+/* ---------- 提交审批 ---------- */
+.ap-card { padding: 14px 16px; }
+.ap-row .ans-box { font-size: 12.5px; max-width: 300px; overflow-wrap: anywhere; }
+.ap-row .ans-box b { color: var(--ink3); font-weight: 600; font-size: 11px; }
+.ap-row .q-pill { flex: none; }
+.ap-foot { display: flex; align-items: center; gap: 10px; border-top: .5px solid var(--sep);
+  padding-top: 10px; margin-top: 6px; }
+.ap-out { font-size: 12px; color: var(--ink2); max-width: 480px; overflow-wrap: anywhere; }
+.ap-out.ok { color: var(--ok-fg); } .ap-out.err { color: var(--red); }
+.ap-out.warn { color: var(--warn-fg); }
+
+/* ---------- 运行日志（§2.4 Consolas 等宽 + 语义色，B3d 色板） ---------- */
+.log-stage { overflow-y: auto; }
+.logbox { background: var(--card); border-radius: var(--radius-card); box-shadow: var(--shadow);
+  border: 1px solid var(--sep);
+  padding: 14px 16px; font-family: Consolas, "Courier New", monospace; font-size: 12.5px;
+  line-height: 1.55; min-height: 100%; }
+.logbox .ln { white-space: pre-wrap; overflow-wrap: anywhere; }
+.logbox .ts { color: var(--ink3); margin-right: 10px; }
+.logbox .err { color: var(--red); } .logbox .warn { color: var(--warn-fg); }
+.logbox .ok { color: var(--ok-fg); }
+
+/* ---------- 设置 ---------- */
+.set-row { padding: 12px 16px; display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.set-row .sw { display: flex; align-items: center; gap: 8px; font-size: 13.5px; }
+.set-row .sw .nm { font-weight: 600; }
+.set-row .kind { font-size: 11px; color: var(--ink3); background: var(--chip);
+  padding: 2px 8px; border-radius: 999px; }
+.set-row .masked { margin-left: auto; font-size: 11.5px; color: var(--ink3);
+  font-family: Consolas, monospace; }
+#thr { width: 70px; }
+/* M3 B3：脱敏值旁的「留空=不修改」独立小字（不再挤占 placeholder） */
+.hint-inline { font-size: 11px; color: var(--ink3); white-space: nowrap; }
+/* M3 I1：拖动排序——手柄 + 拖起态（阴影=paint-only，transform 由 JS 跟手，落位走 flip.js） */
+.grip { cursor: grab; touch-action: none; user-select: none; color: var(--ink3);
+  font-size: 15px; width: 16px; text-align: center; flex: none; }
+.grip:active { cursor: grabbing; }
+.set-row.dragging { position: relative; z-index: 5; box-shadow: var(--shadow-lift); }
+.set-group { display: flex; flex-direction: column; gap: 10px; }
+/* M3 B2：识图后端新增入口 + 预设菜单 */
+.vp-add { align-self: flex-start; }
+.vp-empty { text-align: left; padding: 18px 16px; }
+.preset-menu { padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
+.pm-title { font-size: 12.5px; font-weight: 600; }
+.pm-hint { font-size: 11.5px; color: var(--warn-fg); line-height: 1.5; }
+.pm-items { display: flex; flex-wrap: wrap; gap: 8px; }
+.pm-item { display: inline-flex; align-items: baseline; gap: 6px; }
+.pm-note { font-size: 10.5px; color: var(--ink3); font-weight: 400; }
+
+/* ---------- JS 错误面包屑（见 index.html） ---------- */
+#jserr { position: fixed; left: 0; right: 0; bottom: 0; background: var(--red); color: var(--accent-ink);
+  font-size: 11.5px; padding: 6px 12px; z-index: 99; font-family: Consolas, monospace; }
+
+/* ---------- prefers-reduced-motion（§0：全部降级为淡入淡出，无位移/缩放） ----------
+   位移类（卡片 FLIP / A5 胶囊滑移 / A8 scale / T1 屏滑动）由 JS 侧 reduced() 分支降级；
+   此处保留的都是 opacity/颜色/阴影淡变（即淡入淡出本身）；A7 width 属进度信息非位移，保留。
+   M4：T2 流光 reduce → 静止分支（保留多层渐变本体，只停 background-position 位移）。 */
+@media (prefers-reduced-motion: reduce) {
+  #aurora { animation: none !important; }   /* T2：回落静态渐变（本体保留，只停呼吸） */
+  .card { transition: box-shadow .15s linear, opacity .25s linear; }
+  .pill { transition: background-color .25s linear, color .25s linear; }
+  .chk { transition: background-color .15s linear, border-color .15s linear; }
+  body { transition: none; }
+  /* M3 I2：reduce 下侧栏直接切换宽度，无过渡；I3 指示器由 main.js reduced() 走瞬置 */
+  #sidebar, #sidebar .lbl, #sidebar .bn, #sidebar .side-badge, #sidebar .conn {
+    transition: none !important; }
+}
+
+/* ---------- 弹窗（T4：弹窗=玻璃 chrome） ---------- */
+#modal-mask { position: fixed; inset: 0; background: var(--mask); z-index: 50;
+  backdrop-filter: blur(2px); -webkit-backdrop-filter: blur(2px);
+  display: flex; align-items: center; justify-content: center; }
+#modal-box .dlg { border-radius: var(--radius); width: 380px; padding: 20px 22px; }
+/* 底色/描边/阴影全部交给 .lg（modal.js 挂 class="dlg lg"）——ID 规则里绝不再写 background，
+   否则 specificity 盖掉玻璃（实锤过 :id.class > :class 的坑）。reduced-transparency/@supports
+   回退由 .lg 组统一兜底。 */
+.dlg-title { font-size: 15.5px; font-weight: 700; margin-bottom: 8px; }
+.dlg-hint { font-size: 12px; color: var(--ink2); margin-bottom: 14px; line-height: 1.5; }
+.dlg-body p { font-size: 13px; color: var(--ink2); line-height: 1.7; }
+.dlg .fld { margin-bottom: 10px; }
+.dlg-err { font-size: 12px; color: var(--red); min-height: 18px; margin: 4px 0 8px; }
+.dlg-btns { display: flex; justify-content: flex-end; gap: 10px; margin-top: 8px; }

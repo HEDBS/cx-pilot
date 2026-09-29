@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """全链路真环境自检（docs/TASK-B4.md + docs/TASK-A1.md）：九环逐环断言，打印 PASS/FAIL + 耗时。
 
-运行：~AppData/Local/hermes/hermes-agent/venv/Scripts/python.exe tools/e2e_check.py
+运行：python tools/e2e_check.py（解释器走项目环境：env CX_PYTHON 或 PATH 上的 python）
 纪律：submitter 环绝不 confirm=True（只 dry_run）；solver 环用自造假题不碰真作业提交链；
 provider 环走 %APPDATA%\\cx-pilot 里用户自己的设置；audit 环只 GET 领卷（第 9 环，
 A1 验收=分类正确+缓存二访零请求）。末尾 `E2E: x/9 PASS`。

@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>cx-pilot</title>
+    <link rel="stylesheet" href="styles.css" />
+    <script>
+      // M4 T3 主题前置引导（pre-paint，index.html 内联 classic script）：
+      // 模块脚本(main.js→theme.js)是 deferred——等它执行会先闪一帧亮色，且主题切换发生在首帧后
+      // 会给 #sidebar/#titlebar 起 CSSTransition（nav_probe N2p「刷新后无在跑过渡」直接打爆）。
+      // 在样式首次生效前落定 dataset.theme → 首帧即目标主题，零闪烁、零在飞过渡。
+      // 键名与 theme.js/store.js 持久层一致（"cx.theme"）；localStorage 吞错降级同 lsGet 语义。
+      (function () {
+        var m = "system";
+        try { m = localStorage.getItem("cx.theme") || "system"; } catch (_) { }
+        var dark = m === "dark" || (m !== "light" &&
+          window.matchMedia && matchMedia("(prefers-color-scheme: dark)").matches);
+        document.documentElement.dataset.theme = dark ? "dark" : "light";
+      })();
+    </script>
+  </head>
+  <body>
+    <!-- M4 T2 Aurora 流光背景层（CSS 定义，pointer-events:none；DOM 只是画布） -->
+    <div id="aurora" aria-hidden="true"><div class="layer"></div></div>
+    <div id="titlebar" class="lg">
+      <span class="tb-title"><b>cx-pilot</b> — <span id="tb-screen">作业计划</span></span>
+      <span class="ver" id="verbadge">v…</span>
+      <span class="ver" id="enginebadge">engine …</span>
+      <span class="spacer"></span>
+      <span class="tb-status" id="tb-status">正在拉起 sidecar…</span>
+      <button id="theme-btn" type="button" title="主题：跟随系统"><span class="tb-theme-ic" id="theme-ic">◐</span><span id="theme-label">跟随系统</span></button>
+    </div>
+    <div id="frame">
+      <aside id="sidebar" class="lg">
+        <div id="side-pill"></div>
+        <div class="side-item active" data-scr="plan"><span class="ic">▤</span><span class="lbl">作业计划</span><span class="side-badge" style="display:none">0</span></div>
+        <div class="side-item" data-scr="queue"><span class="ic violet">▶</span><span class="lbl">解题队列</span><span class="side-badge" style="display:none">0</span></div>
+        <div class="side-item" data-scr="approve"><span class="ic green">✓</span><span class="lbl">提交审批</span><span class="side-badge" style="display:none">0</span></div>
+        <div class="side-item" data-scr="logs"><span class="ic gray">≋</span><span class="lbl">运行日志</span></div>
+        <div class="side-sec"><span class="lbl">系统</span></div>
+        <div class="side-item" data-scr="settings"><span class="ic gray">⚙</span><span class="lbl">设置</span></div>
+        <div class="side-sec"><span class="lbl">后端</span></div>
+        <div id="backend-list"></div>
+        <div class="side-fold" id="side-fold" title="折叠/展开侧栏">«</div>
+      </aside>
+      <main id="main">
+        <section id="scr-plan" class="scr"></section>
+        <section id="scr-queue" class="scr" hidden></section>
+        <section id="scr-approve" class="scr" hidden></section>
+        <section id="scr-logs" class="scr" hidden></section>
+        <section id="scr-settings" class="scr" hidden></section>
+      </main>
+    </div>
+    <div id="modal-mask" hidden><div id="modal-box"></div></div>
+    <div id="jserr" hidden></div>
+    <script>
+      // 面包屑：webview 内 JS 崩了必须肉眼可见（M1 踩坑：模块图 import 期异常
+      // 静默杀死 boot，窗口只剩空壳——无面包屑时只能靠截图猜）。
+      window.addEventListener("error", function (e) {
+        var d = document.getElementById("jserr");
+        d.hidden = false;
+        d.textContent = "JS: " + (e.message || "error") + " @" + (e.filename || "") + ":" + (e.lineno || "");
+      }, true);
+      window.addEventListener("unhandledrejection", function (e) {
+        var d = document.getElementById("jserr");
+        d.hidden = false;
+        d.textContent = "JS-promise: " + (e.reason && (e.reason.message || e.reason) || "rejection");
+      });
+      // 常驻诊断：2.5s 后 boot 仍未置位（模块图崩/握手前死）才显式报，boot 正常则永不可见
+      setTimeout(function () {
+        if (!window.__cxbootted) {
+          var t = document.getElementById("tb-status");
+          t.className = "tb-status err";
+          t.textContent = "boot 未运行？__TAURI__=" + !!window.__TAURI__ +
+            " core=" + !!(window.__TAURI__ && window.__TAURI__.core);
+        }
+      }, 2500);
+    </script>
+    <script type="module" src="main.js"></script>
+  </body>
+</html>

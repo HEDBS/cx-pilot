@@ -1,0 +1,5 @@
+# M0 sidecar 依赖（装进运行 server 的任一 python 环境——解释器不固定路径：env CX_PYTHON 或 PATH 上的 python，
+# 与 shell/src-tauri/src/sidecar.rs 的回退链同口径）
+# 安装：python -m pip install -r requirements-server.txt
+fastapi==0.133.1
+uvicorn==0.41.0

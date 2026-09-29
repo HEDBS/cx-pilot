@@ -8,7 +8,7 @@ import re
 import time
 from dataclasses import dataclass, asdict
 
-from core.client import Client, BASE, DATA, strip_html
+from core.client import Client, BASE, DATA, strip_html, RiskControl
 
 MOOC = "https://mooc1.chaoxing.com"
 
@@ -99,8 +99,17 @@ def _works_of_course(client, cid, cls, cpi, name):
 
 
 def refresh_all(client, max_courses=None, delay=(0.6, 1.4), progress=None):
-    """全量遍历。每课 2 个请求(门户+列表)。progress(i,n) 可选回调。"""
-    trips = _course_triplets(client)
+    """全量遍历。每课 2 个请求(门户+列表)。progress(i,n) 可选回调。
+
+    风控自愈（真环境实测 2026-09-29）：课程列表页被超星罚站时先丢弃过期 cookie 全新
+    登录再试一次；仍被拦就**抛出** RiskControl——绝不静默返回 0 条（用户会误判「没作业」）。
+    """
+    try:
+        trips = _course_triplets(client)
+    except RiskControl:
+        if not client.recover_session():
+            raise
+        trips = _course_triplets(client)   # 仍被拦则原样抛出，由上层显式报错
     if max_courses:
         trips = trips[:max_courses]
     all_w = []
@@ -114,6 +123,13 @@ def refresh_all(client, max_courses=None, delay=(0.6, 1.4), progress=None):
             ws = _works_of_course(client, cid, cls, cpi, name)
             all_w.extend(ws)
             print("[%d/%d] %s -> %d 条" % (i + 1, len(trips), name[:18], len(ws)))
+        except RiskControl:
+            # 单课中途被罚站：重登后只重试这一课；仍被拦就中止（不静默丢课）
+            if not client.recover_session():
+                raise
+            ws = _works_of_course(client, cid, cls, cpi, name)
+            all_w.extend(ws)
+            print("[%d/%d] %s -> %d 条（重登后重试）" % (i + 1, len(trips), name[:18], len(ws)))
         except Exception as e:
             print("[%d/%d] %s ERR %s" % (i + 1, len(trips), name[:18], str(e)[:60]))
         time.sleep(delay[0] + random.random() * (delay[1] - delay[0]))

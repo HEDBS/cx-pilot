@@ -31,6 +31,16 @@ class SessionExpired(Exception):
     pass
 
 
+class RiskControl(Exception):
+    """超星风控拦截（非掉线）：如【9010】要求图片验证码。
+
+    与 SessionExpired 分开的原因：重登**不能**解决验证码罚站，必须明确告诉用户
+    去手机端/浏览器人过验证码；当成掉线处理会陷入「重登→仍失败」的死循环。
+    """
+
+    pass
+
+
 class ApiError(Exception):
     pass
 
@@ -75,6 +85,13 @@ class Client:
         # 风控/掉线特征页：~820-910B 的「温馨提示/提交失败」
         if len(body) < 1200 and ("温馨提示" in body or "提交失败" in body or "没有此页面访问权限" in body):
             raise SessionExpired("error page: " + re.sub(r"\s+", " ", strip_html(body))[:80])
+        # 风控罚站页（真环境实测 2026-09-29，4527B）：正文「【9010】操作异常，请输入图片
+        # 中的验证码」，带 processVerifyPng.ac 验证码图。它不是掉线、重登治不好，
+        # 必须让用户看见并按指引人过验证码——旧代码不识别，解析器拿不到内容就静默返回
+        # 0 条，用户只看到「扫描完成 0 条」。
+        if "【9010】" in body or ("提示页面" in body and "processVerifyPng" in body):
+            m = re.search(r"【(\d+)】([^<\n]{0,80})", body)
+            raise RiskControl(m.group(0).strip() if m else "超星风控拦截（需人工过验证码）")
         return body
 
     def raw_post(self, url, form: dict, referer="https://mooc1.chaoxing.com/", headers=None, timeout=30):
@@ -157,6 +174,24 @@ class Client:
                 return True
         except (SessionExpired, ApiError):
             pass
+        return self.login()
+
+    def recover_session(self):
+        """丢弃过期 cookie 后全新登录（真环境实测：mooc1 侧会话过期会招来【9010】
+        风控罚站，而 stat2 仍报 code==0 使 ensure_login() 误判为已登录、永不重登）。
+
+        返回 True=重登成功。cookie 先备份为 cookies.txt.stale 再删（可回溯）。
+        """
+        try:
+            if os.path.exists(COOKIE_FILE):
+                try:
+                    os.replace(COOKIE_FILE, COOKIE_FILE + ".stale")
+                except OSError:
+                    os.remove(COOKIE_FILE)
+        except OSError:
+            pass
+        self.jar = http.cookiejar.MozillaCookieJar(COOKIE_FILE)
+        self.op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(self.jar))
         return self.login()
 
 
