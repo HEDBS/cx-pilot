@@ -23,17 +23,23 @@ import zipfile
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
-def find_release_exe():
-    """找 release 壳：优先 CARGO_TARGET_DIR，其次 shell/src-tauri/target。"""
+def find_release_exe(explicit=None):
+    """找 release 壳。候选顺序：显式 --shell-exe > CARGO_TARGET_DIR > 默认 target 目录。
+
+    为什么要显式这个参数：脚本常在**新开的 shell** 里跑（没有 export CARGO_TARGET_DIR），
+    而本机把 target 放在了 D 盘自定义目录 —— 只认默认路径就会误报"壳没编"。
+    """
     cands = []
+    if explicit:
+        cands.append(explicit)
     ct = os.environ.get("CARGO_TARGET_DIR")
     if ct:
         cands.append(os.path.join(ct, "release", "shell.exe"))
     cands.append(os.path.join(ROOT, "shell", "src-tauri", "target", "release", "shell.exe"))
     for c in cands:
-        if os.path.isfile(c):
-            return c
-    return None
+        if c and os.path.isfile(c):
+            return c, cands
+    return None, cands
 
 
 QUICKSTART = """cx-pilot v{ver} — 学习通作业助手
@@ -76,15 +82,19 @@ def main():
     ap.add_argument("--out", default=os.path.normpath(os.path.join(ROOT, "..", "cx-release")),
                     help="输出目录（默认仓库同级的 cx-release/，不写死盘符）")
     ap.add_argument("--no-scan", action="store_true", help="跳过泄漏扫描（仅本地调试用，发布别加）")
+    ap.add_argument("--shell-exe", default=None,
+                    help="release 壳路径（缺省按 CARGO_TARGET_DIR / 默认 target 找）")
     a = ap.parse_args()
 
     side_in = os.path.join(ROOT, "dist", "cx-sidecar")
     side_exe = os.path.join(side_in, "cx-sidecar.exe")
-    shell_exe = find_release_exe()
+    shell_exe, tried = find_release_exe(a.shell_exe)
     if not os.path.isfile(side_exe):
         sys.exit("缺 sidecar 冻结件：%s\n先跑 python -m PyInstaller --noconfirm --clean sidecar.spec" % side_exe)
     if not shell_exe:
-        sys.exit("缺 release 壳：先跑 cd shell/src-tauri && cargo build --release")
+        sys.exit("缺 release 壳。找过这些位置：\n  " + "\n  ".join(tried) +
+                 "\n先跑 cd shell/src-tauri && cargo build --release，" +
+                 "或用 --shell-exe 直接指定")
 
     pkg = os.path.normpath(os.path.join(a.out, "cx-pilot-v" + a.version))
     if os.path.isdir(pkg):

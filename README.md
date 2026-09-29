@@ -92,20 +92,33 @@ sidecar 只绑 `127.0.0.1:<随机端口>`，启动生成随机 token，所有请
 ### 打包发布（维护者）
 
 产物 = **免安装绿色包**：`sidecar/` 里是 PyInstaller 冻结的 Python 运行时，
-所以用户机器不需要装 Python。三步：
+所以用户机器不需要装 Python。步骤：
 
 ```bash
 # 1) 冻结 sidecar（产物 dist/cx-sidecar/）
 python -m PyInstaller --noconfirm --clean sidecar.spec
 
 # 2) 编 release 壳（产物 target/release/shell.exe）
+#    ⚠ 必须带 --remap-path-prefix：Rust 第三方 crate 的 file!() 会把编译时的
+#    CARGO_HOME 全路径写进 panic 消息，release exe 里就烘进了本机路径
+#    （如 D:/Hermes/Rust/cargo/registry/src/...）。编译期改写掉，别等到发布才发现。
+export RUSTFLAGS="--remap-path-prefix=$CARGO_HOME=/cargo \
+--remap-path-prefix=$CARGO_TARGET_DIR=/target \
+--remap-path-prefix=<你的仓库绝对路径>/shell=/src"
 cd shell/src-tauri && cargo build --release
 
-# 3) 组装 + 打 zip + 泄漏扫描（脚本在 tools/make_release.py）
-python tools/make_release.py --version 0.4.0
+# 3) 组装 + 泄漏扫描 + 打 zip（脚本在 tools/make_release.py）
+python tools/make_release.py --version 0.4.0 --shell-exe <release 壳路径>
+
+# 4) 打 tag 并发 release（把 zip 与构建产物之外的说明一起发）
+git tag -a v0.4.0 -m "v0.4.0" && git push origin v0.4.0
+#    有 gh 就直接 gh release create v0.4.0 <zip> --notes-file <notes>；
+#    没有就用 REST API（POST /repos/HEDBS/cx-pilot/releases + uploads.github.com 传资产）
 ```
 
-发布前必过：`python tools/scan_leak.py`（含 zip 二进制字节层，词表只放指向身份的词）。
+发布前必过：`python tools/scan_leak.py`（仓库）**与** `python tools/scan_leak.py <组装目录>`
+（产物，含 exe/pyc 的 raw 字节层）。注意 zip 是压缩的，扫不出明文——**扫描必须在打包前做**，
+`make_release.py` 已按这个顺序执行（扫描不过就不出包）。
 公开仓禁入：`docs/TASK-*.md`、`docs/claude-*.md`、`docs/HANDOFF*`（已 .gitignore）。
 
 ## 边界与免责
