@@ -68,6 +68,55 @@ QUICKSTART = """cx-pilot v{ver} — 学习通作业助手
 """
 
 
+def _neutral(n):
+    """等长的中性占位串：原地替换，绝不改变文件长度/结构。"""
+    stem = b"X:\\build\\scrubbed\\"
+    return (stem * (n // len(stem) + 1))[:n]
+
+
+def scrub_local_paths(pkg, extra_roots=()):
+    """擦掉发布产物里的**打包机本机路径**（等长原地替换）。
+
+    为什么需要这一步：tauri-build 生成的 resource.rc 会把图标的**绝对路径**写进
+    Windows 资源段（实测 release exe 里留了一份 `D:\\Hermes\\...\\src-tauri`）。
+    那串文本运行时不使用（图标按资源 ID 加载），却会在公开仓的发行包里泄漏打包机路径。
+
+    本函数不是"免死金牌"：擦完仍然要跑泄漏扫描，扫描才是判据（漏擦了就出不了包）。
+    待擦前缀全部在运行时从环境推导，不写死任何本机路径。
+    """
+    roots = [ROOT, os.environ.get("CARGO_HOME"), os.environ.get("CARGO_TARGET_DIR"),
+             os.environ.get("RUSTUP_HOME"), os.path.expanduser("~"),
+             os.environ.get("USERPROFILE")] + list(extra_roots)
+    pats = set()
+    for r in roots:
+        if not r:
+            continue
+        r = os.path.abspath(r)
+        pats.add(r.encode("utf-8"))
+        pats.add(r.replace("\\", "/").encode("utf-8"))
+        pats.add(r.replace("/", "\\").encode("utf-8"))
+    pats = sorted(pats, key=len, reverse=True)      # 长的先替，避免前缀互相打断
+
+    changed = []
+    for d, _s, fs in os.walk(pkg):
+        for f in fs:
+            p = os.path.join(d, f)
+            try:
+                raw = open(p, "rb").read()
+            except OSError:
+                continue
+            new, n = raw, 0
+            for pat in pats:
+                if pat in new:
+                    n += new.count(pat)
+                    new = new.replace(pat, _neutral(len(pat)))
+            if n:
+                with open(p, "wb") as fh:
+                    fh.write(new)
+                changed.append((os.path.relpath(p, pkg), n))
+    return changed
+
+
 def sha256(p):
     h = hashlib.sha256()
     with open(p, "rb") as f:
@@ -105,7 +154,8 @@ def main():
     shutil.copy2(shell_exe, os.path.join(pkg, "cx-pilot.exe"))
     # 冻结运行时 → sidecar/（sidecar.rs 打包态就找 <exe_dir>/sidecar/cx-sidecar.exe）
     shutil.copytree(side_in, os.path.join(pkg, "sidecar"))
-    with open(os.path.join(pkg, "使用说明.txt"), "w", encoding="utf-8", newline="\r\n") as f:
+    # 文件名保持 ASCII：中文名在部分解压工具/资源管理器里会显示成乱码（内容仍是中文）
+    with open(os.path.join(pkg, "README.txt"), "w", encoding="utf-8", newline="\r\n") as f:
         f.write(QUICKSTART.format(ver=a.version))
     lic = os.path.join(ROOT, "LICENSE")
     if os.path.isfile(lic):
@@ -115,6 +165,15 @@ def main():
     size_mb = sum(os.path.getsize(os.path.join(d, f))
                   for d, _s, fs in os.walk(pkg) for f in fs) / 1048576.0
     print("组装完成: %s  (%d 文件, %.1f MB)" % (pkg, n_files, size_mb))
+
+    # 擦打包机本机路径（tauri-build 的 resource.rc 会把图标绝对路径编进资源段）
+    scrubbed = scrub_local_paths(pkg)
+    if scrubbed:
+        print("已擦除本机路径（等长替换）:")
+        for rel, n in scrubbed[:12]:
+            print("  %-44s %d 处" % (rel, n))
+        if len(scrubbed) > 12:
+            print("  ... 另 %d 个文件" % (len(scrubbed) - 12))
 
     # 泄漏扫描必须在打包前做：zip 压缩后扫不到明文
     if not a.no_scan:
